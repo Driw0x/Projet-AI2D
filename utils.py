@@ -1,6 +1,13 @@
 import pandas as pd
-import ast_error_detection as ast
+import ast_error_detection as aed
+import ast
 
+def code_to_ast(code):
+    return ast.parse(code)
+
+def ast_dump(t):
+    return ast.dump(t, indent=2)
+ 
 def read_data(path):
     format = path.split(".")[-1]
     match format:
@@ -50,7 +57,8 @@ def AlgoPython_data(df):
     return df_final.reset_index(drop=True)
 
 def primary_code_error_two_prog(p1, p2):
-    return ast.get_primary_code_errors(p1, p2)
+    return aed.get_primary_code_errors(p1, p2)
 
 def prog_vs_answer(p1, answer):
-    return ast.get_typology_based_code_error(p1, answer)
+    return aed.get_typology_based_code_error(p1, answer)
+
