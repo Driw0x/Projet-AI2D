@@ -1,5 +1,5 @@
 import pandas as pd
-import json
+import ast_error_detection as ast
 
 def read_data(path):
     format = path.split(".")[-1]
@@ -12,8 +12,6 @@ def read_data(path):
             print("Format incorrect")
             return
     return df
-
-import pandas as pd
 
 def AlgoPython_data(df):
 
@@ -51,3 +49,8 @@ def AlgoPython_data(df):
 
     return df_final.reset_index(drop=True)
 
+def primary_code_error_two_prog(p1, p2):
+    return ast.get_primary_code_errors(p1, p2)
+
+def prog_vs_answer(p1, answer):
+    return ast.get_typology_based_code_error(p1, answer)
