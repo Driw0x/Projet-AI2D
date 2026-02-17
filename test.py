@@ -11,8 +11,16 @@ df = utils.AlgoPython_data(data)
 # print(utils.ast_dump(utils.code_to_ast(df["code"][6])))
 
 # # Caracteristique des donnees
-# print("Nb de donnees: ", df.shape[0])
-# print("Nb d'etablissement: ", len(np.unique(df["nom_etab"])))
-# print("Nb d'utilisateur: ", len(np.unique(df["display_name"])))
+# print(df.columns)
+# print(df.shape)
+# print(df.shape[0], "donnees")
+# print(len(np.unique(df["nom_etab"])), "etablissements")
+# print(len(np.unique(df["display_name"])), "utilisateurs")
+# print("Moyenne statut OK: ", np.mean(df["statut"]))
+# print("Ecart-type statut OK: ", np.std(df["statut"]))
+# print("Moyenne nb tentative: ", np.mean(df["nb_tentative"]))
+# print("Ecart-type nb tentative: ", np.std(df["nb_tentative"]))
+# print("Moyenne temps passe: ", np.mean(df["temps_passe"]))
+# print("Ecart-type temps passe: ", np.std(df["temps_passe"]))
 
 
