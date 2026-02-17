@@ -1,6 +1,7 @@
 import pandas as pd
 import ast_error_detection as aed
 import ast
+import numpy as np
 
 def code_to_ast(code):
     return ast.parse(code)
@@ -55,6 +56,9 @@ def AlgoPython_data(df):
     df_final = df_final[df_final["code"].notna()]
 
     df_final = df_final.reset_index(drop=True)
+
+    # Transformation des OK en 1 et KO en 0 pour calculer les caracteristiques statistiques
+    df_final["statut"] = np.where(df_final["statut"] == "ok", 1, 0)
 
     return df_final[df_final["statut"] != "err"]
 
