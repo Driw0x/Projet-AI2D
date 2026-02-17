@@ -54,7 +54,9 @@ def AlgoPython_data(df):
 
     df_final = df_final[df_final["code"].notna()]
 
-    return df_final.reset_index(drop=True)
+    df_final = df_final.reset_index(drop=True)
+
+    return df_final[df_final["statut"] != "err"]
 
 def primary_code_error_two_prog(p1, p2):
     return aed.get_primary_code_errors(p1, p2)
