@@ -6,9 +6,15 @@ data = utils.read_data("data/2025.json")
 df = utils.AlgoPython_data(data)
 
 # show(df)
+p = df[(df["level_1"] == "B18") & (df["id_classe"] == 2234)]
 
-# print(utils.code_to_ast(df["code"][6]))
-# print(utils.ast_dump(utils.code_to_ast(df["code"][6])))
+p1 = utils.code_to_ast(df["code"][0])
+p2 = utils.code_to_ast(df["code"][1])
+p3 = utils.code_to_ast(df["code"][2])
+p4 = utils.code_to_ast(df["code"][3])
+# print(p1)
+# print(utils.ast_dump(p1))
+print(utils.prog_vs_answer(p3, [p4]))
 
 # # Caracteristique des donnees
 # print(df.columns)

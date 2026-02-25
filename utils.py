@@ -56,15 +56,68 @@ def AlgoPython_data(df):
     df_final = df_final[df_final["code"].notna()]
 
     df_final = df_final.reset_index(drop=True)
-
+    df_final = df_final[(df_final["statut"] != "err") & (df_final["statut"] != "ask")]
     # Transformation des OK en 1 et KO en 0 pour calculer les caracteristiques statistiques
     df_final["statut"] = np.where(df_final["statut"] == "ok", 1, 0)
 
-    return df_final[df_final["statut"] != "err"]
+    return df_final
 
 def primary_code_error_two_prog(p1, p2):
     return aed.get_primary_code_errors(p1, p2)
 
-def prog_vs_answer(p1, answer):
-    return aed.get_typology_based_code_error(p1, answer)
+def prog_vs_answer(p1, list_answer):
+    return aed.get_typology_based_code_error(p1, list_answer)
 
+def regle(primary_code_error):
+    def extract_function_name(s):
+        return s.split(":")[-1].strip()
+    
+    for i in primary_code_error[1]:
+        erreur = i[0]
+        context = i[-1].split(" > ")
+        print(erreur)
+        match erreur:
+            case 'CONST_VALUE_MISMATCH':
+                print(f"\tConstante en argument pour la fonction {extract_function_name(context[-2])} incorrecte.")
+            case 'MISSING_CONST_VALUE':
+                print(f"\tManque l'argument à la fonction {extract_function_name(context[-2])} dans le programme")            
+            case 'MISSING_CALL_STATEMENT' | 'MISSING_FOR_LOOP':
+                print(f"\tManque l'appel à la fonction {extract_function_name(context[-1])} dans le programme")
+            case _ if 'UNNECESSARY' in erreur:
+                print(f"\tAppel inutile à la fonction {extract_function_name(context[-1])} dans le programme")    
+            case _:
+                print("\tRetour pas encore prise en charge")
+
+def comparaison_tentative_solution(df):
+    prog = []
+    p = df.reset_index(drop=True)
+    for i in range(len(p)):
+        prog.append(p.iloc[i]["code"])
+    
+    answer = p.iloc[len(p) - 1]["code"]
+    ast_answer = code_to_ast(answer)
+
+    for i in range(len(prog)-1):
+        print(f"Tentative {i + 1}: ")
+        if prog[i]:
+            ast_p = code_to_ast(prog[i])
+            regle(primary_code_error_two_prog(ast_p, ast_answer))
+        else:
+            print("Code vide")
+
+def analyse_user(id_compte, df):
+    u = df[(df["id_compte"] == id_compte)]
+    ex = np.unique(u["level_1"])
+    for e in ex:
+        print(f"Exercice {e}:")
+        p = u[u["level_1"] == e]
+        if len(p) > 1:
+            comparaison_tentative_solution(p)
+        else:
+            print("Qu'un seul essaie")
+            if p["statut"].iloc[0] == 1:
+                print("Il a réussi du premier coup")
+            else:
+                print("Il a abandonné dès le premier essaie")
+        print()
+        
