@@ -5,13 +5,14 @@ import numpy as np
 data = utils.read_data("data/2025.json")
 df = utils.AlgoPython_data(data)
 
-# show(df)
+# show(df[df["code"] != ""])
+
 p = df[(df["level_1"] == "B18") & (df["id_classe"] == 2234)]
 
-p1 = utils.code_to_ast(df["code"][0])
-p2 = utils.code_to_ast(df["code"][1])
-p3 = utils.code_to_ast(df["code"][2])
-p4 = utils.code_to_ast(df["code"][3])
+p1 = utils.code_to_ast(df.iloc[0]["code"])
+p2 = utils.code_to_ast(df.iloc[1]["code"])
+p3 = utils.code_to_ast(df.iloc[2]["code"])
+p4 = utils.code_to_ast(df.iloc[3]["code"])
 # print(p1)
 # print(utils.ast_dump(p1))
 print(utils.prog_vs_answer(p3, [p4]))
@@ -29,4 +30,4 @@ print(utils.prog_vs_answer(p3, [p4]))
 # print("Moyenne temps passe: ", np.mean(df["temps_passe"]))
 # print("Ecart-type temps passe: ", np.std(df["temps_passe"]))
 
-
+utils.recherche_echantillon(df)

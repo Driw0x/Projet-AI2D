@@ -58,7 +58,7 @@ def AlgoPython_data(df):
     df_final = df_final.reset_index(drop=True)
     df_final = df_final[(df_final["statut"] != "err") & (df_final["statut"] != "ask")]
     # Transformation des OK en 1 et KO en 0 pour calculer les caracteristiques statistiques
-    df_final["statut"] = np.where(df_final["statut"] == "ok", 1, 0)
+    # df_final["statut"] = np.where(df_final["statut"] == "ok", 1, 0)
 
     return df_final
 
@@ -120,4 +120,17 @@ def analyse_user(id_compte, df):
             else:
                 print("Il a abandonné dès le premier essaie")
         print()
-        
+
+def recherche_echantillon(df):
+    df = df[df["code"] != ""]
+    d = {}
+    for id in np.unique(df["id_compte"]):
+        print(f"User {id}")
+        for ex in np.unique(df["level_1"]):
+            if len(df[(df["id_compte"] == id) & (df["level_1"] == ex)]) > 5:
+                if ex not in d:
+                    d[ex] = 0
+                d[ex] += 1
+                print(f"Exercice {ex}")
+        print()
+    print(d)
