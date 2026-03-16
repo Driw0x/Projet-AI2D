@@ -58,16 +58,22 @@ def AlgoPython_data(df):
     df_final = df_final.reset_index(drop=True)
     df_final = df_final[(df_final["statut"] != "err") & (df_final["statut"] != "ask")]
     # Transformation des OK en 1 et KO en 0 pour calculer les caracteristiques statistiques
-    # df_final["statut"] = np.where(df_final["statut"] == "ok", 1, 0)
+    df_final["statut"] = np.where(df_final["statut"] == "ok", 1, 0)
 
     return df_final
 
 def primary_code_error_two_prog(p1, p2):
-    return aed.get_primary_code_errors(p1, p2)
+    try:
+        return aed.get_primary_code_errors(p1, p2)
+    except:
+        return [0, []]
 
 def prog_vs_answer(p1, list_answer):
-    return aed.get_typology_based_code_error(p1, list_answer)
-
+    try:
+        return aed.get_typology_based_code_error(p1, list_answer)
+    except:
+        return [0, {}]
+    
 def regle(primary_code_error):
     def extract_function_name(s):
         return s.split(":")[-1].strip()
@@ -121,16 +127,54 @@ def analyse_user(id_compte, df):
                 print("Il a abandonné dès le premier essaie")
         print()
 
+def erreur_unique(df, id, ex):
+    e = []
+    d = df[(df['id_compte'] == id) & (df['level_1'] == ex)].reset_index(drop=True)
+    for i in range(len(d) - 1):
+        for err in primary_code_error_two_prog(d['code'].iloc[i], d['code'].iloc[i+1])[1]:
+            e.append(err[0])
+    return list(np.unique(e))
+    
 def recherche_echantillon(df):
     df = df[df["code"] != ""]
-    d = {}
+    u = []
+    c = {}
+    e = {}
+    ex_e = {}
+    ex_u = {}
     for id in np.unique(df["id_compte"]):
         print(f"User {id}")
+        u_add = False
         for ex in np.unique(df["level_1"]):
             if len(df[(df["id_compte"] == id) & (df["level_1"] == ex)]) > 5:
-                if ex not in d:
-                    d[ex] = 0
-                d[ex] += 1
+                if ex not in ex_u:
+                    ex_u[ex] = []
+                
+                ex_u[ex] = ex_u[ex].append(id)
+
+                u_add = True
+                if ex not in c:
+                    c[ex] = 0
+                c[ex] += 1
+                # print(type(erreur_unique(df, id, ex)))
+                # print(erreur_unique(df,id,ex))
+
+                for err in erreur_unique(df, id, ex):
+                    if err not in e:
+                        e[err] = 0
+                    if (ex, err)  not in ex_e:
+                        ex_e[(ex, err)] = 0
+                    ex_e[(ex, err)] += 1
+                    e[err] += 1
+
                 print(f"Exercice {ex}")
+                print(f"Erreur: {erreur_unique(df, id, ex)}")
+        if u_add:
+            u.append(id)
         print()
-    print(d)
+    print(u)
+    print(c)
+    print(e)
+    print(ex_e)
+    print(ex_u)
+    return u, c, e, ex_e, ex_u
