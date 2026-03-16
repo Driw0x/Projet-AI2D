@@ -142,15 +142,16 @@ def recherche_echantillon(df):
     e = {}
     ex_e = {}
     ex_u = {}
+    
+    for ex in np.unique(df["level_1"]):
+        ex_u[ex] = []
+
     for id in np.unique(df["id_compte"]):
         print(f"User {id}")
         u_add = False
         for ex in np.unique(df["level_1"]):
             if len(df[(df["id_compte"] == id) & (df["level_1"] == ex)]) > 5:
-                if ex not in ex_u:
-                    ex_u[ex] = []
-                
-                ex_u[ex] = ex_u[ex].append(id)
+                ex_u[ex].append(id)
 
                 u_add = True
                 if ex not in c:
