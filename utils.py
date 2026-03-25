@@ -2,6 +2,8 @@ import pandas as pd
 import ast_error_detection as aed
 import ast
 import numpy as np
+import json
+import textwrap
 from ast_error_detection.zang_shasha_distance import distance
 
 # Outils AST
@@ -11,7 +13,17 @@ def code_to_ast(code):
     Transforme un code Python sous forme de texte en AST.
     AST = arbre syntaxique abstrait.
     """
-    return ast.parse(code)
+    try:
+        return ast.parse(code)
+
+    except Exception:
+        try:
+            # normaliser indentation
+            code_fixed = textwrap.dedent(code)
+            return ast.parse(code_fixed)
+
+        except Exception:
+            return None
 
 def ast_dump(t):
     """
@@ -247,296 +259,295 @@ def build_user_exercise_count_dict(df):
 
     return counts
 
-def build_user_exercise_error_dict(df):
-    """
-    Calcule une seule fois les erreurs uniques pour chaque couple (user, exercice).
-
-    Retour :
-    - dict {(id_compte, exercice): [erreurs_uniques]}
-    """
-    df = df[df["code"] != ""]
-
-    user_ex_errors = {}
-
-    for user_id in np.unique(df["id_compte"]):
-        user_df = df[df["id_compte"] == user_id]
-
-        for ex in np.unique(user_df["level_1"]):
-            sub = user_df[user_df["level_1"] == ex].reset_index(drop=True)
-
-            if len(sub) > 1:
-                errs = []
-                for i in range(len(sub) - 1):
-                    res = primary_code_error_two_prog(
-                        sub["code"].iloc[i],
-                        sub["code"].iloc[i + 1]
-                    )[1]
-                    for err in res:
-                        errs.append(err[0])
-
-                errs = list(np.unique(errs))
-            else:
-                errs = []
-
-            key = (
-                int(user_id) if isinstance(user_id, np.generic) else user_id,
-                str(ex)
-            )
-            user_ex_errors[key] = errs
-
-    return user_ex_errors
-    
-# Construction des dictionnaires
-
-def recherche_echantillon(df, user_ex_errors, user_ex_counts):
-    """
-    Cherche les users ayant plus de 5 tentatives sur au moins un exercice.
-
-    Retour :
-    - u : liste des users retenus
-    - c : nb de users par exercice
-    - e : nb d'apparitions par erreur
-    - ex_e : nb d'apparitions par couple (exercice, erreur)
-    - ex_u : users par exercice
-    """
-    df = df[df["code"] != ""]
-
-    if user_ex_errors is None:
-        user_ex_errors = build_user_exercise_error_dict(df)
-
-    if user_ex_counts is None:
-        user_ex_counts = build_user_exercise_count_dict(df)
-
-    u = []
-    c = {}
-    e = {}
-    ex_e = {}
-    ex_u = {}
-
-    all_ex = [str(ex) for ex in np.unique(df["level_1"])]
-    all_users = [
-        int(user_id) if isinstance(user_id, np.generic) else user_id
-        for user_id in np.unique(df["id_compte"])
-    ]
-
-    for ex in all_ex:
-        ex_u[ex] = []
+def couples_valides(df):
+    all_ex = np.unique(df["level_1"])
+    all_users = np.unique(df["id_compte"])
+    couples = set()
+    user_ex_counts = build_user_exercise_count_dict(df)
 
     for user_id in all_users:
-        print(f"User {user_id}")
-        u_add = False
-
         for ex in all_ex:
             key = (user_id, ex)
             nb_tentatives = user_ex_counts.get(key, 0)
-
             if nb_tentatives > 5:
-                erreurs = user_ex_errors.get(key, [])
+                couples.add(key)
 
-                ex_u[ex].append(user_id)
-                u_add = True
+    return couples
 
-                if ex not in c:
-                    c[ex] = 0
-                c[ex] += 1
+# Wrapping
 
-                for err in erreurs:
-                    if err not in e:
-                        e[err] = 0
-                    if (ex, err) not in ex_e:
-                        ex_e[(ex, err)] = 0
-
-                    ex_e[(ex, err)] += 1
-                    e[err] += 1
-
-                print(f"Exercice {ex}")
-                print(f"Erreur: {erreurs}")
-
-        if u_add:
-            u.append(user_id)
-
-        print()
-
-    print(u)
-    print(c)
-    print(e)
-    print(ex_e)
-    print(ex_u)
-
-    return u, c, e, ex_e, ex_u
-
-class ZSSNode:
+class Wrapper:
     """
-    Noeud simple compatible avec l'implémentation Zhang-Shasha utilisée ici.
+    Wrapper d'un noeud AST pour la distance de Zhang-Shasha.
     """
 
-    def __init__(self, label, children=None, path=None):
-        self.label = label
-        self.children = children if children is not None else []
-        self._path = path if path is not None else [label]
+    def __init__(self, ast_node, path=None):
+        self.label = type(ast_node).__name__
+        self.children = []
+
+        if path is None:
+            self._path = [self.label]
+        else:
+            self._path = path
+
+        child_index = 0
+        for _, value in ast.iter_fields(ast_node):
+            if isinstance(value, ast.AST):
+                child_path = self._path + [f"{type(value).__name__}[{child_index}]"]
+                self.children.append(Wrapper(value, child_path))
+                child_index += 1
+
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        child_path = self._path + [f"{type(item).__name__}[{child_index}]"]
+                        self.children.append(Wrapper(item, child_path))
+                        child_index += 1
 
     def get_path(self):
         return self._path
 
-
-def get_ast_children(node):
+def code_to_zss_node(code):
     """
-    Retourne les vrais enfants AST d'un noeud Python.
-
-    Paramètres
-    ----------
-    node : ast.AST
-
-    Retour
-    ------
-    list
-        Liste des enfants AST.
+    Transforme un code Python en arbre compatible avec Zhang-Shasha.
     """
-    children = []
-
-    for field_name, value in ast.iter_fields(node):
-        if isinstance(value, ast.AST):
-            children.append(value)
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, ast.AST):
-                    children.append(item)
-
-    return children
-
-
-def ast_to_zss_tree(node, path=None, index=0):
-    """
-    Convertit récursivement un AST Python en arbre compatible Zhang-Shasha.
-
-    Paramètres
-    ----------
-    node : ast.AST
-    path : list ou None
-    index : int
-
-    Retour
-    ------
-    ZSSNode
-        Racine de l'arbre converti.
-    """
-    label = type(node).__name__
-
-    if path is None:
-        current_path = [f"{label}[{index}]"]
-    else:
-        current_path = path + [f"{label}[{index}]"]
-
-    children = []
-    ast_children = get_ast_children(node)
-
-    for i, child in enumerate(ast_children):
-        children.append(ast_to_zss_tree(child, current_path, i))
-
-    return ZSSNode(label=label, children=children, path=current_path)
-
+    return Wrapper(ast.parse(code))
 
 def get_children(node):
     """
-    Retourne les enfants d'un noeud ZSSNode.
-
-    Paramètres
-    ----------
-    node : ZSSNode
-
-    Retour
-    ------
-    list
-        Liste des enfants du noeud.
+    Retourne les enfants d'un noeud compatible Zhang-Shasha.
     """
     return node.children
 
+# Construction des dictionnaires
 
-def code_to_zss_tree(code):
+def build_solution_dict(solution_data):
     """
-    Transforme un code Python en arbre compatible Zhang-Shasha.
+    Construit un dictionnaire des solutions par exercice.
 
-    Paramètres
-    ----------
-    code : str
-
-    Retour
-    ------
-    ZSSNode
-        Racine de l'arbre converti.
+    Retour:
+    dict{exerciseTitle: {"correctCodes","exerciseType"}}
     """
-    py_ast = ast.parse(code)
-    return ast_to_zss_tree(py_ast)
+    solution_dict = {}
 
+    for _, row in solution_data.iterrows():
+        solution_dict[row["exerciseTitle"].split(" ")[0].replace("-", "")] = {
+            "correctCodes": row["correctCodes"],
+            "exerciseType": row["exerciseType"]
+        }
 
-def build_dataset(
-    dfo,
-    ex_u,
-    user_col="id_compte",
-    ex_col="level_1",
-    code_col="code"
-):
+    return solution_dict
+
+def build_datasets(dfo, solution_df, save_json=True):
     """
-    Construit un dataset de transitions entre tentatives.
+    Construit:
+    - le dataset des transitions successives (t, t+1)
+    - le dataset du saut maximal ZSS par (user, exercice)
 
-    Paramètres
-    ----------
-    dfo : pandas.DataFrame
-        Données des tentatives.
-    ex_u : dict
-        {exercice: [users]}
-    user_col : str
-    ex_col : str
-    code_col : str
-
-    Retour
-    ------
-    pandas.DataFrame
-        Dataset avec id, exercice, t, t_plus_1, distance_zss,
-        code_t et code_t_plus_1.
+    Retour:
+        (dataset_successif, dataset_max_zss)
     """
-    df = dfo[dfo[code_col].notna() & (dfo[code_col] != "")].copy()
+    df = dfo[dfo["code"].notna() & (dfo["code"] != "")].copy()
 
-    couples_valides = {
-        (user_id, ex)
-        for ex, users in ex_u.items()
-        for user_id in users
-    }
+    couples = couples_valides(dfo)
+    df = df[df[["id_compte", "level_1"]].apply(tuple, axis=1).isin(couples)].copy()
 
-    df = df[df[[user_col, ex_col]].apply(tuple, axis=1).isin(couples_valides)].copy()
+    solution_dict = build_solution_dict(solution_df)
 
-    lignes = []
+    lignes_successif = []
+    lignes_max_zss = []
 
-    for (user_id, ex), group in df.groupby([user_col, ex_col], sort=False):
+    for (user_id, ex), group in df.groupby(["id_compte", "level_1"], sort=False):
         group = group.reset_index(drop=True)
 
         if len(group) < 2:
             continue
 
+        sol_info = solution_dict.get(ex)
+        if sol_info is not None:
+            correct_codes = sol_info["correctCodes"]
+            exercise_type = sol_info["exerciseType"]
+
+            ast_solutions = []
+            for sol in correct_codes:
+                ast_sol = code_to_ast(sol)
+                if ast_sol is not None:
+                    ast_solutions.append(ast_sol)
+        else:
+            correct_codes = []
+            exercise_type = np.nan
+            ast_solutions = []
+
+        # Cache local pour éviter de parser/recalculer plusieurs fois
+        ast_cache = {}
+        zss_cache = {}
+
+        def get_ast(code):
+            if code not in ast_cache:
+                ast_cache[code] = code_to_ast(code)
+            return ast_cache[code]
+
+        def get_zss_tree(code):
+            if code not in zss_cache:
+                try:
+                    zss_cache[code] = code_to_zss_node(code)
+                except Exception:
+                    zss_cache[code] = None
+            return zss_cache[code]
+
+        best_row = None
+        best_dist = -np.inf
+
         for i in range(len(group) - 1):
-            code_t = group.loc[i, code_col]
-            code_t_plus_1 = group.loc[i + 1, code_col]
+            for j in range(i + 1, len(group)):
+                code_t = group.loc[i, "code"]
+                code_t_plus = group.loc[j, "code"]
 
-            try:
-                tree_t = code_to_zss_tree(code_t)
-                tree_t_plus_1 = code_to_zss_tree(code_t_plus_1)
+                ast_t = get_ast(code_t)
+                ast_t_plus = get_ast(code_t_plus)
 
-                dist, _ = distance(tree_t, tree_t_plus_1, get_children)
+                # distance ZSS
+                try:
+                    tree_t = get_zss_tree(code_t)
+                    tree_t_plus = get_zss_tree(code_t_plus)
 
-            except Exception as err:
-                print(f"Erreur distance user={user_id}, ex={ex}, t={i+1}: {err}")
-                dist = np.nan
+                    if tree_t is not None and tree_t_plus is not None:
+                        dist, _ = distance(tree_t, tree_t_plus, get_children)
+                    else:
+                        dist = np.nan
+                except Exception as err:
+                    print(f"Erreur distance user={user_id}, ex={ex}, t={i+1}, t_plus={j+1}: {err}")
+                    dist = np.nan
 
-            ligne = {
-                "id": user_id,
-                "exercice": ex,
-                "t": i + 1,
-                "t_plus_1": i + 2,
-                "distance_zss": dist,
-                "code_t": code_t,
-                "code_t_plus_1": code_t_plus_1
-            }
+                # comparaison t -> t_plus
+                try:
+                    if ast_t is not None and ast_t_plus is not None:
+                        comp_tt1 = primary_code_error_two_prog(ast_t, ast_t_plus)
+                    else:
+                        comp_tt1 = [0, []]
+                except Exception as err:
+                    print(f"Erreur comparaison t->t_plus user={user_id}, ex={ex}, t={i+1}, t_plus={j+1}: {err}")
+                    comp_tt1 = [0, []]
 
-            lignes.append(ligne)
+                try:
+                    nb_err_tt1 = len(comp_tt1[1])
+                except Exception:
+                    nb_err_tt1 = 0
 
-    return pd.DataFrame(lignes)
+                # comparaison t -> solution
+                try:
+                    if ast_t is not None and ast_solutions:
+                        comp_t = prog_vs_answer(ast_t, ast_solutions)
+                    else:
+                        comp_t = [0, {}]
+                except Exception as err:
+                    print(f"Erreur comparaison solution user={user_id}, ex={ex}, t={i+1}: {err}")
+                    comp_t = [0, {}]
+
+                # comparaison t_plus -> solution
+                try:
+                    if ast_t_plus is not None and ast_solutions:
+                        comp_t_plus = prog_vs_answer(ast_t_plus, ast_solutions)
+                    else:
+                        comp_t_plus = [0, {}]
+                except Exception as err:
+                    print(f"Erreur comparaison solution user={user_id}, ex={ex}, t={j+1}: {err}")
+                    comp_t_plus = [0, {}]
+
+                row = {
+                    "id": user_id,
+                    "exercice": ex,
+                    "type_exercice": exercise_type,
+                    "t": i + 1,
+                    "t_plus_1": j + 1,
+                    "distance_zss": dist,
+                    "comparaison_t_t_plus_1": comp_tt1,
+                    "nb_erreurs_t_t_plus_1": nb_err_tt1,
+                    "comparaison_t_solution": comp_t,
+                    "comparaison_t_plus_1_solution": comp_t_plus,
+                    "code_t": code_t,
+                    "code_t_plus_1": code_t_plus,
+                    "solution": list(correct_codes)
+                }
+
+                # Dataset successif : seulement j = i+1
+                if j == i + 1:
+                    lignes_successif.append(row)
+
+                # Dataset max_zss : on garde le meilleur (t, t+i)
+                dist_cmp = -np.inf if pd.isna(dist) else dist
+                if dist_cmp > best_dist:
+                    best_dist = dist_cmp
+                    best_row = row
+
+        if best_row is not None:
+            lignes_max_zss.append(best_row)
+
+    dataset_successif = pd.DataFrame(lignes_successif)
+    dataset_max_zss = pd.DataFrame(lignes_max_zss)
+
+    if save_json:
+        save_dataset_to_json(dataset_successif, "dataset.json")
+        save_dataset_to_json(dataset_max_zss, "dataset_max_zss.json")
+
+    return dataset_successif, dataset_max_zss
+
+# Sauvegarde
+
+def clean_value(v):
+    """
+    Nettoie une valeur pour la rendre JSON compatible.
+    """
+    # None direct
+    if v is None:
+        return None
+
+    # numpy scalaires (à faire AVANT pd.isna)
+    if isinstance(v, np.integer):
+        return int(v)
+
+    if isinstance(v, np.floating):
+        if np.isnan(v):
+            return None
+        return float(v)
+
+    if isinstance(v, np.bool_):
+        return bool(v)
+
+    # types python simples
+    if isinstance(v, (int, float, str, bool)):
+        try:
+            if pd.isna(v):
+                return None
+        except Exception:
+            pass
+        return v
+
+    # listes / tuples
+    if isinstance(v, (list, tuple)):
+        return [clean_value(x) for x in v]
+
+    # dict
+    if isinstance(v, dict):
+        return {k: clean_value(val) for k, val in v.items()}
+
+    # fallback
+    return str(v)
+
+
+def save_dataset_to_json(df, path):
+    """
+    Sauvegarde un dataset (DataFrame) en JSON.
+    """
+
+    # conversion DataFrame -> liste de dict
+    records = df.to_dict(orient="records")
+
+    # nettoyage JSON safe
+    clean_records = [clean_value(row) for row in records]
+
+    # sauvegarde
+    with open("data/" + path, "w", encoding="utf-8") as f:
+        json.dump(clean_records, f, indent=2, ensure_ascii=False)
+
+    print(f"Dataset sauvegardé dans {path}")
