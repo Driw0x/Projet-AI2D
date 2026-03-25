@@ -2,9 +2,7 @@ import pandas as pd
 import ast_error_detection as aed
 import ast
 import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
+from ast_error_detection.zang_shasha_distance import distance
 
 # Outils AST
 
@@ -366,3 +364,179 @@ def recherche_echantillon(df, user_ex_errors, user_ex_counts):
     print(ex_u)
 
     return u, c, e, ex_e, ex_u
+
+class ZSSNode:
+    """
+    Noeud simple compatible avec l'implémentation Zhang-Shasha utilisée ici.
+    """
+
+    def __init__(self, label, children=None, path=None):
+        self.label = label
+        self.children = children if children is not None else []
+        self._path = path if path is not None else [label]
+
+    def get_path(self):
+        return self._path
+
+
+def get_ast_children(node):
+    """
+    Retourne les vrais enfants AST d'un noeud Python.
+
+    Paramètres
+    ----------
+    node : ast.AST
+
+    Retour
+    ------
+    list
+        Liste des enfants AST.
+    """
+    children = []
+
+    for field_name, value in ast.iter_fields(node):
+        if isinstance(value, ast.AST):
+            children.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, ast.AST):
+                    children.append(item)
+
+    return children
+
+
+def ast_to_zss_tree(node, path=None, index=0):
+    """
+    Convertit récursivement un AST Python en arbre compatible Zhang-Shasha.
+
+    Paramètres
+    ----------
+    node : ast.AST
+    path : list ou None
+    index : int
+
+    Retour
+    ------
+    ZSSNode
+        Racine de l'arbre converti.
+    """
+    label = type(node).__name__
+
+    if path is None:
+        current_path = [f"{label}[{index}]"]
+    else:
+        current_path = path + [f"{label}[{index}]"]
+
+    children = []
+    ast_children = get_ast_children(node)
+
+    for i, child in enumerate(ast_children):
+        children.append(ast_to_zss_tree(child, current_path, i))
+
+    return ZSSNode(label=label, children=children, path=current_path)
+
+
+def get_children(node):
+    """
+    Retourne les enfants d'un noeud ZSSNode.
+
+    Paramètres
+    ----------
+    node : ZSSNode
+
+    Retour
+    ------
+    list
+        Liste des enfants du noeud.
+    """
+    return node.children
+
+
+def code_to_zss_tree(code):
+    """
+    Transforme un code Python en arbre compatible Zhang-Shasha.
+
+    Paramètres
+    ----------
+    code : str
+
+    Retour
+    ------
+    ZSSNode
+        Racine de l'arbre converti.
+    """
+    py_ast = ast.parse(code)
+    return ast_to_zss_tree(py_ast)
+
+
+def build_dataset(
+    dfo,
+    ex_u,
+    user_col="id_compte",
+    ex_col="level_1",
+    code_col="code"
+):
+    """
+    Construit un dataset de transitions entre tentatives.
+
+    Paramètres
+    ----------
+    dfo : pandas.DataFrame
+        Données des tentatives.
+    ex_u : dict
+        {exercice: [users]}
+    user_col : str
+    ex_col : str
+    code_col : str
+
+    Retour
+    ------
+    pandas.DataFrame
+        Dataset avec id, exercice, t, t_plus_1, distance_zss,
+        code_t et code_t_plus_1.
+    """
+    df = dfo[dfo[code_col].notna() & (dfo[code_col] != "")].copy()
+
+    couples_valides = {
+        (user_id, ex)
+        for ex, users in ex_u.items()
+        for user_id in users
+    }
+
+    df = df[df[[user_col, ex_col]].apply(tuple, axis=1).isin(couples_valides)].copy()
+
+    lignes = []
+
+    for (user_id, ex), group in df.groupby([user_col, ex_col], sort=False):
+        group = group.reset_index(drop=True)
+
+        if len(group) < 2:
+            continue
+
+        for i in range(len(group) - 1):
+            code_t = group.loc[i, code_col]
+            code_t_plus_1 = group.loc[i + 1, code_col]
+
+            try:
+                tree_t = code_to_zss_tree(code_t)
+                tree_t_plus_1 = code_to_zss_tree(code_t_plus_1)
+
+                dist, _ = distance(tree_t, tree_t_plus_1, get_children)
+
+            except Exception as err:
+                print(f"Erreur distance user={user_id}, ex={ex}, t={i+1}: {err}")
+                dist = np.nan
+
+            ligne = {
+                "id": user_id,
+                "exercice": ex,
+                "t": i + 1,
+                "t_plus_1": i + 2,
+                "distance_zss": dist,
+                "code_t": code_t,
+                "code_t_plus_1": code_t_plus_1
+            }
+
+            lignes.append(ligne)
+
+    return pd.DataFrame(lignes)
