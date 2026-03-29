@@ -1,6 +1,5 @@
 import utils
 from pandasgui import show
-import numpy as np
 
 # Lecture des donnees
 
@@ -26,5 +25,11 @@ df = utils.AlgoPython_data(data)
 # show(df[df["code"] != ""])
 
 # Echantillonnage
+c = utils.cas1(df, sol)
+# c = utils.read_data("data/cas1.json")
+show(c)
 
-# utils.build_datasets(df, sol)
+# comp_t_sol = c["comparaison_t_t1"]
+# ops = c["ops"]
+# print(comp_t_sol)
+# print(ops)

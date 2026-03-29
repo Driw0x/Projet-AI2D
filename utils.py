@@ -4,7 +4,9 @@ import ast
 import numpy as np
 import json
 import textwrap
+from tqdm import tqdm
 from ast_error_detection.zang_shasha_distance import distance
+
 
 # Outils AST
 
@@ -109,7 +111,7 @@ def AlgoPython_data(df):
     traj_long = traj_long.explode("tentatives", ignore_index=True)
 
     # normalise les tentatives
-    tentatives = pd.json_normalize(traj_long["tentatives"])
+    tentatives = pd.json_normalize(traj_long["tentatives"].apply(lambda x: x if isinstance(x, dict) else {}))
 
     # joint les infos des tentatives au contexte
     df_final = traj_long.drop(columns=["tentatives"]).join(tentatives)
@@ -152,6 +154,7 @@ def prog_vs_answer(p1, list_answer):
     except:
         return [0, {}]
     
+# A transformer en modification
 def regle(primary_code_error):
     """
     Affiche une interpretation textuelle simple des erreurs detectees.
@@ -184,57 +187,24 @@ def regle(primary_code_error):
             case _:
                 print("\tRetour pas encore prise en charge")
 
-def comparaison_tentative_solution(df):
-    """
-    Compare toutes les tentatives d'un exercice à la dernière tentative,
-    consideree ici comme la solution de reference.
-    """
-    prog = []
-    p = df.reset_index(drop=True)
-
-    # recupère tous les codes
-    for i in range(len(p)):
-        prog.append(p.iloc[i]["code"])
-
-    # dernière tentative = reponse de reference
-    answer = p.iloc[len(p) - 1]["code"]
-    ast_answer = code_to_ast(answer)
-
-    # compare chaque tentative à la reponse
-    for i in range(len(prog) - 1):
-        print(f"Tentative {i + 1}: ")
-
-        if prog[i]:
-            ast_p = code_to_ast(prog[i])
-            regle(primary_code_error_two_prog(ast_p, ast_answer))
-        else:
-            print("Code vide")
-
-def analyse_user(id_compte, df):
-    """
-    Analyse tous les exercices d'un utilisateur.
-    Pour chaque exercice :
-    - compare les tentatives si plusieurs essais
-    - indique reussite directe ou abandon si un seul essai
-    """
-    u = df[(df["id_compte"] == id_compte)]
-    ex = np.unique(u["level_1"])
-
-    for e in ex:
-        print(f"Exercice {e}:")
-        p = u[u["level_1"] == e]
-
-        if len(p) > 1:
-            comparaison_tentative_solution(p)
-        else:
-            print("Qu'un seul essai")
-            if p["statut"].iloc[0] == 1:
-                print("Il a reussi du premier coup")
-            else:
-                print("Il a abandonne dès le premier essai")
-        print()
-
 # Pre calcul
+
+def build_solution_dict(solution_data):
+    """
+    Construit un dictionnaire des solutions par exercice.
+
+    Retour:
+    dict{exerciseTitle: {"correctCodes","exerciseType"}}
+    """
+    solution_dict = {}
+
+    for _, row in solution_data.iterrows():
+        solution_dict[row["exerciseTitle"].split(" ")[0].replace("-", "")] = {
+            "correctCodes": row["correctCodes"],
+            "exerciseType": row["exerciseType"]
+        }
+
+    return solution_dict
 
 def build_user_exercise_count_dict(df):
     """
@@ -311,7 +281,7 @@ def code_to_zss_node(code):
     """
     Transforme un code Python en arbre compatible avec Zhang-Shasha.
     """
-    return Wrapper(ast.parse(code))
+    return Wrapper(code_to_ast(code))
 
 def get_children(node):
     """
@@ -319,178 +289,18 @@ def get_children(node):
     """
     return node.children
 
-# Construction des dictionnaires
+def get_ast(code, ast_cache):
+    if code not in ast_cache:
+        ast_cache[code] = code_to_ast(code)
+    return ast_cache[code]
 
-def build_solution_dict(solution_data):
-    """
-    Construit un dictionnaire des solutions par exercice.
-
-    Retour:
-    dict{exerciseTitle: {"correctCodes","exerciseType"}}
-    """
-    solution_dict = {}
-
-    for _, row in solution_data.iterrows():
-        solution_dict[row["exerciseTitle"].split(" ")[0].replace("-", "")] = {
-            "correctCodes": row["correctCodes"],
-            "exerciseType": row["exerciseType"]
-        }
-
-    return solution_dict
-
-def build_datasets(dfo, solution_df, save_json=True):
-    """
-    Construit:
-    - le dataset des transitions successives (t, t+1)
-    - le dataset du saut maximal ZSS par (user, exercice)
-
-    Retour:
-        (dataset_successif, dataset_max_zss)
-    """
-    df = dfo[dfo["code"].notna() & (dfo["code"] != "")].copy()
-
-    couples = couples_valides(dfo)
-    df = df[df[["id_compte", "level_1"]].apply(tuple, axis=1).isin(couples)].copy()
-
-    solution_dict = build_solution_dict(solution_df)
-
-    lignes_successif = []
-    lignes_max_zss = []
-
-    for (user_id, ex), group in df.groupby(["id_compte", "level_1"], sort=False):
-        group = group.reset_index(drop=True)
-
-        if len(group) < 2:
-            continue
-
-        sol_info = solution_dict.get(ex)
-        if sol_info is not None:
-            correct_codes = sol_info["correctCodes"]
-            exercise_type = sol_info["exerciseType"]
-
-            ast_solutions = []
-            for sol in correct_codes:
-                ast_sol = code_to_ast(sol)
-                if ast_sol is not None:
-                    ast_solutions.append(ast_sol)
-        else:
-            correct_codes = []
-            exercise_type = np.nan
-            ast_solutions = []
-
-        # Cache local pour éviter de parser/recalculer plusieurs fois
-        ast_cache = {}
-        zss_cache = {}
-
-        def get_ast(code):
-            if code not in ast_cache:
-                ast_cache[code] = code_to_ast(code)
-            return ast_cache[code]
-
-        def get_zss_tree(code):
-            if code not in zss_cache:
-                try:
-                    zss_cache[code] = code_to_zss_node(code)
-                except Exception:
-                    zss_cache[code] = None
-            return zss_cache[code]
-
-        best_row = None
-        best_dist = -np.inf
-
-        for i in range(len(group) - 1):
-            for j in range(i + 1, len(group)):
-                code_t = group.loc[i, "code"]
-                code_t_plus = group.loc[j, "code"]
-
-                ast_t = get_ast(code_t)
-                ast_t_plus = get_ast(code_t_plus)
-
-                # distance ZSS
-                try:
-                    tree_t = get_zss_tree(code_t)
-                    tree_t_plus = get_zss_tree(code_t_plus)
-
-                    if tree_t is not None and tree_t_plus is not None:
-                        dist, _ = distance(tree_t, tree_t_plus, get_children)
-                    else:
-                        dist = np.nan
-                except Exception as err:
-                    print(f"Erreur distance user={user_id}, ex={ex}, t={i+1}, t_plus={j+1}: {err}")
-                    dist = np.nan
-
-                # comparaison t -> t_plus
-                try:
-                    if ast_t is not None and ast_t_plus is not None:
-                        comp_tt1 = primary_code_error_two_prog(ast_t, ast_t_plus)
-                    else:
-                        comp_tt1 = [0, []]
-                except Exception as err:
-                    print(f"Erreur comparaison t->t_plus user={user_id}, ex={ex}, t={i+1}, t_plus={j+1}: {err}")
-                    comp_tt1 = [0, []]
-
-                try:
-                    nb_err_tt1 = len(comp_tt1[1])
-                except Exception:
-                    nb_err_tt1 = 0
-
-                # comparaison t -> solution
-                try:
-                    if ast_t is not None and ast_solutions:
-                        comp_t = prog_vs_answer(ast_t, ast_solutions)
-                    else:
-                        comp_t = [0, {}]
-                except Exception as err:
-                    print(f"Erreur comparaison solution user={user_id}, ex={ex}, t={i+1}: {err}")
-                    comp_t = [0, {}]
-
-                # comparaison t_plus -> solution
-                try:
-                    if ast_t_plus is not None and ast_solutions:
-                        comp_t_plus = prog_vs_answer(ast_t_plus, ast_solutions)
-                    else:
-                        comp_t_plus = [0, {}]
-                except Exception as err:
-                    print(f"Erreur comparaison solution user={user_id}, ex={ex}, t={j+1}: {err}")
-                    comp_t_plus = [0, {}]
-
-                row = {
-                    "id": user_id,
-                    "exercice": ex,
-                    "type_exercice": exercise_type,
-                    "t": i + 1,
-                    "t_plus_1": j + 1,
-                    "distance_zss": dist,
-                    "comparaison_t_t_plus_1": comp_tt1,
-                    "nb_erreurs_t_t_plus_1": nb_err_tt1,
-                    "comparaison_t_solution": comp_t,
-                    "comparaison_t_plus_1_solution": comp_t_plus,
-                    "code_t": code_t,
-                    "code_t_plus_1": code_t_plus,
-                    "solution": list(correct_codes)
-                }
-
-                # Dataset successif : seulement j = i+1
-                if j == i + 1:
-                    lignes_successif.append(row)
-
-                # Dataset max_zss : on garde le meilleur (t, t+i)
-                dist_cmp = -np.inf if pd.isna(dist) else dist
-                if dist_cmp > best_dist:
-                    best_dist = dist_cmp
-                    best_row = row
-
-        if best_row is not None:
-            lignes_max_zss.append(best_row)
-
-    dataset_successif = pd.DataFrame(lignes_successif)
-    dataset_max_zss = pd.DataFrame(lignes_max_zss)
-
-    if save_json:
-        save_dataset_to_json(dataset_successif, "dataset.json")
-        save_dataset_to_json(dataset_max_zss, "dataset_max_zss.json")
-
-    return dataset_successif, dataset_max_zss
+def get_zss_tree(code, zss_cache):
+    if code not in zss_cache:
+        try:
+            zss_cache[code] = code_to_zss_node(code)
+        except Exception:
+            zss_cache[code] = None
+    return zss_cache[code]
 
 # Sauvegarde
 
@@ -551,3 +361,133 @@ def save_dataset_to_json(df, path):
         json.dump(clean_records, f, indent=2, ensure_ascii=False)
 
     print(f"Dataset sauvegardé dans {path}")
+
+# Cas 1: transformation t->t+1
+def cas1_x_y(data, x, y, ast_cache=None, zss_cache=None):
+    """
+    Compare le code x et y.
+    """
+    if x < 0 or y < 0 or x >= len(data) or y >= len(data):
+        return np.nan, {}, [0, {}]
+
+    if ast_cache is None:
+        ast_cache = {}
+    if zss_cache is None:
+        zss_cache = {}
+
+    code_x = data.loc[x, "code"]
+    code_y = data.loc[y, "code"]
+
+    ast_x = get_ast(code_x, ast_cache)
+    ast_y = get_ast(code_y, ast_cache)
+
+    # comparaison x -> y
+    try:
+        if ast_x is not None and ast_y is not None:
+            primary = primary_code_error_two_prog(ast_x, [ast_y])
+            typology = prog_vs_answer(ast_x, [ast_y])
+        else:
+            primary = (0, [])
+            typology = [0, {}]
+    except Exception as err:
+        tqdm.write(f"Erreur comparaison t={x+1}, t'={y+1}: {err}")
+        primary = (0, [])
+        typology = [0, {}]
+
+    # distance ZSS
+    tree_x = get_zss_tree(code_x, zss_cache)
+    tree_y = get_zss_tree(code_y, zss_cache)
+
+    if tree_x is None or tree_y is None:
+        d, ops = np.nan, {}
+    else:
+        try:
+            d, ops = distance(tree_x, tree_y, get_children)
+        except Exception as err:
+            tqdm.write(f"Erreur distance t={x+1}, t'={y+1}: {err}")
+            d, ops = np.nan, {}
+
+    return d, ops, primary, typology
+
+def cas1(dfo, solution_df):
+    """
+    Construit le dataset des comparaisons t -> t+1.
+
+    Retour:
+        dataset_t_sol(
+            id,
+            exercice,
+            type_exercice,
+            t,
+            dist_zss,
+            ops,
+            code_t,
+            code_t_1,
+            comparaison_t_t1
+        )
+    """
+    df = dfo[dfo["code"].notna() & (dfo["code"] != "")].copy()
+
+    couples = couples_valides(dfo)
+    df = df[df[["id_compte", "level_1"]].apply(tuple, axis=1).isin(couples)].copy()
+
+    solution_dict = build_solution_dict(solution_df)
+
+    lignes = []
+
+    user_groups = list(df.groupby("id_compte", sort=False))
+
+    for user_id, user_df in tqdm(user_groups, desc="Processing", position=0, leave=True, dynamic_ncols=True):
+
+        ex_groups = list(user_df.groupby("level_1", sort=False))
+
+        for ex, group in tqdm(ex_groups,
+                              desc=f"User {user_id}",
+                              position=1,
+                              leave=False):
+
+            group = group.reset_index(drop=True)
+
+            if len(group) < 2:
+                continue
+
+            sol_info = solution_dict.get(ex)
+            exercise_type = sol_info.get("exerciseType", np.nan) if sol_info is not None else np.nan
+
+            ast_cache = {}
+            zss_cache = {}
+
+            for i in tqdm(range(len(group) - 1),
+                          desc=f"Exercice {ex}",
+                          position=2,
+                          leave=False):
+                
+                code_t = group.loc[i, "code"]
+                code_t_1 = group.loc[i + 1, "code"]
+                
+                d, ops, primary, typology = cas1_x_y(group,
+                                                     i,
+                                                     i + 1,
+                                                     ast_cache,
+                                                     zss_cache)
+                
+                row = {"id": user_id,
+                       "exercice": ex,
+                       "type_exercice": exercise_type,
+                       "t": i + 1,
+                       "dist_zss": d,
+                       "ops": ops,
+                       "code_t": code_t,
+                       "code_t_1": code_t_1,
+                       "primary_code_errors_score": primary[0],
+                       "primary_code_errors": primary[1],
+                       "typology_based_code_error_score": typology[0],
+                       "typology_based_code_error": typology[1]}
+
+                lignes.append(row)
+
+    dataset = pd.DataFrame(lignes)
+
+    save_dataset_to_json(dataset, "cas1.json")
+
+    return dataset
