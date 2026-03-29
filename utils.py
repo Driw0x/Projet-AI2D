@@ -414,7 +414,7 @@ def cas1(dfo, solution_df):
     Construit le dataset des comparaisons t -> t+1.
 
     Retour:
-        dataset_t_sol(
+        dataset_t_t1(
             id,
             exercice,
             type_exercice,

@@ -29,7 +29,7 @@ c = utils.cas1(df, sol)
 # c = utils.read_data("data/cas1.json")
 show(c)
 
-# comp_t_sol = c["comparaison_t_t1"]
+# comp_t_t1 = c["comparaison_t_t1"]
 # ops = c["ops"]
-# print(comp_t_sol)
+# print(comp_t_t1)
 # print(ops)
