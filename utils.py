@@ -289,11 +289,6 @@ def get_children(node):
     """
     return node.children
 
-def get_ast(code, ast_cache):
-    if code not in ast_cache:
-        ast_cache[code] = code_to_ast(code)
-    return ast_cache[code]
-
 def get_zss_tree(code, zss_cache):
     if code not in zss_cache:
         try:
@@ -363,32 +358,23 @@ def save_dataset_to_json(df, path):
     print(f"Dataset sauvegardé dans {path}")
 
 # Cas 1: transformation t->t+1
-def cas1_x_y(data, x, y, ast_cache=None, zss_cache=None):
+def cas1_x_y(data, x, y, zss_cache=None):
     """
     Compare le code x et y.
     """
     if x < 0 or y < 0 or x >= len(data) or y >= len(data):
         return np.nan, {}, [0, {}]
 
-    if ast_cache is None:
-        ast_cache = {}
     if zss_cache is None:
         zss_cache = {}
 
     code_x = data.loc[x, "code"]
     code_y = data.loc[y, "code"]
 
-    ast_x = get_ast(code_x, ast_cache)
-    ast_y = get_ast(code_y, ast_cache)
-
     # comparaison x -> y
     try:
-        if ast_x is not None and ast_y is not None:
-            primary = primary_code_error_two_prog(ast_x, [ast_y])
-            typology = prog_vs_answer(ast_x, [ast_y])
-        else:
-            primary = (0, [])
-            typology = [0, {}]
+        primary = primary_code_error_two_prog(code_x, code_y)
+        typology = prog_vs_answer(code_x, [code_y])
     except Exception as err:
         tqdm.write(f"Erreur comparaison t={x+1}, t'={y+1}: {err}")
         primary = (0, [])
@@ -454,7 +440,6 @@ def cas1(dfo, solution_df):
             sol_info = solution_dict.get(ex)
             exercise_type = sol_info.get("exerciseType", np.nan) if sol_info is not None else np.nan
 
-            ast_cache = {}
             zss_cache = {}
 
             for i in tqdm(range(len(group) - 1),
@@ -468,7 +453,6 @@ def cas1(dfo, solution_df):
                 d, ops, primary, typology = cas1_x_y(group,
                                                      i,
                                                      i + 1,
-                                                     ast_cache,
                                                      zss_cache)
                 
                 row = {"id": user_id,
