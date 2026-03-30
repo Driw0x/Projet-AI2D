@@ -153,39 +153,6 @@ def prog_vs_answer(p1, list_answer):
         return aed.get_typology_based_code_error(p1, list_answer)
     except:
         return [0, {}]
-    
-# A transformer en modification
-def regle(primary_code_error):
-    """
-    Affiche une interpretation textuelle simple des erreurs detectees.
-    """
-    def extract_function_name(s):
-        """
-        Extrait le nom de la fonction à partir du contexte.
-        """
-        return s.split(":")[-1].strip()
-    
-    for i in primary_code_error[1]:
-        erreur = i[0]
-        context = i[-1].split(" > ")
-
-        print(erreur)
-
-        match erreur:
-            case 'CONST_VALUE_MISMATCH':
-                print(f"\tConstante en argument pour la fonction {extract_function_name(context[-2])} incorrecte.")
-
-            case 'MISSING_CONST_VALUE':
-                print(f"\tManque l'argument à la fonction {extract_function_name(context[-2])} dans le programme")
-
-            case 'MISSING_CALL_STATEMENT' | 'MISSING_FOR_LOOP':
-                print(f"\tManque l'appel à la fonction {extract_function_name(context[-1])} dans le programme")
-
-            case _ if 'UNNECESSARY' in erreur:
-                print(f"\tAppel inutile à la fonction {extract_function_name(context[-1])} dans le programme")
-
-            case _:
-                print("\tRetour pas encore prise en charge")
 
 # Pre calcul
 
@@ -303,9 +270,6 @@ def clean_value(v):
     """
     Nettoie une valeur pour la rendre JSON compatible.
     """
-    # None direct
-    if v is None:
-        return None
 
     # numpy scalaires (à faire AVANT pd.isna)
     if isinstance(v, np.integer):
@@ -328,6 +292,10 @@ def clean_value(v):
             pass
         return v
 
+    # set -> liste
+    if isinstance(v, set):
+        return [clean_value(x) for x in v]
+
     # listes / tuples
     if isinstance(v, (list, tuple)):
         return [clean_value(x) for x in v]
@@ -338,7 +306,6 @@ def clean_value(v):
 
     # fallback
     return str(v)
-
 
 def save_dataset_to_json(df, path):
     """
@@ -475,3 +442,63 @@ def cas1(dfo, solution_df):
     save_dataset_to_json(dataset, "cas1.json")
 
     return dataset
+
+# Cas 2
+def regle(ops=None, primary_code_errors=None, typology_based_code_error=None, ):
+    """
+    Affiche une interpretation textuelle simple des erreurs detectees.
+    """
+    if ops != None:
+        pass
+    elif primary_code_errors != None:
+        for errors in primary_code_errors:
+            if errors[0].startswith("Missing"):
+                print("Ajout")
+            elif errors[0].startswith("UNNECESSARY"):
+                print("Suppression")
+            else:
+                print("Mise à jour")
+    elif typology_based_code_error != None:
+        cas = set()
+        for errors in typology_based_code_error:
+            if errors.startswith("F_CALL_MISSING"):
+                print(f"Ajout d'un appel à la fonction {errors.split('_')[-1]}")
+            elif errors.startswith("F_CALL_UNNECESSARY"):
+                print(f"Suppression d'un appel à la fonction {errors.split('_')[-1]}")
+            else:
+                """
+                'F_CALL_INCORRECT_POSITION_AVANCER'
+                'LO_BODY_ERROR', 'EXP_ERROR_ASSIGNMENT_MISSING'
+                'F_CALL_PRINT_ERROR_ARG', 'F_CALL_COULEUR_ERROR'
+                'F_CALL_INCORRECT_POSITION_PRINT', 'F_CALL_BAS_ERROR'
+                'F_CALL_HAUT_ERROR', 'EXP_ERROR_OPERATOR', 'LO_FOR_NUMBER_ITERATION_ERROR'
+                'F_DEFINITION_MISSING', 'EXP_ERROR_OPERANDS', 'F_CALL_ARC_ERROR'
+                'F_CALL_INCORRECT_POSITION_ARC', 'F_CALL_INCORRECT_POSITION_TOURNER'
+                'F_CALL_INCORRECT_POSITION_POSER', 'F_CALL_INCORRECT_POSITION_LEVER'
+                'LO_FOR_MISPLACED', 'F_CALL_AVANCER_ERROR', 'F_CALL_GAUCHE_ERROR'
+                'F_CALL_TOURNER_ERROR', 'LO_BODY_MISSING_NOT_PRESENT_ANYWHERE'
+                'LO_FOR_UNNECESSARY', 'EXP_ERROR_ASSIGNMENT_UNNECESSARY'
+                'F_CALL_DROITE_ERROR', 'LO_FOR_MISSING', 'F_CALL_INCORRECT_POSITION_COULEUR'
+                'F_CALL_INCORRECT_POSITION_BAS', 'F_CALL_INCORRECT_POSITION_DROITE'
+                'LO_BODY_MISPLACED', 'EXP_ERROR_OPERATION', 'F_CALL_INCORRECT_POSITION_GAUCHE'
+                'CS_MISSING', 'LO_FOR_NUMBER_ITERATION_ERROR_UNDER2'
+                'F_CALL_INCORRECT_POSITION_HAUT', 'F_DEFINITION_UNNECESSARY'
+                """
+                print(f"Cas pas traite: {errors}")
+                cas.add(errors)
+        return cas
+                
+def cas2(c):
+    primary_code_errors = c["primary_code_errors"]
+    typology_based_code_error = c["typology_based_code_error"]
+
+    # for i in range(len(primary_code_errors)):
+    #     regle(primary_code_errors=primary_code_errors[i])
+    #     print(f"Fin {i}")
+    #     print()
+    all = set()
+    for i in range(len(typology_based_code_error)):
+        print("Liste",typology_based_code_error[i])
+        all = all | (regle(typology_based_code_error=typology_based_code_error[i]))
+        print(f"Fin {i}")
+    return all

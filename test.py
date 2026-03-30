@@ -1,14 +1,16 @@
 import utils
+import ast
+from tqdm import trange
 from pandasgui import show
 
 # Lecture des donnees
 
 # lit le fichier brut
-data = utils.read_data("data/2025.json")
-sol = utils.read_data("data/exercises.json")
+# data = utils.read_data("data/2025.json")
+# sol = utils.read_data("data/exercises.json")
 
 # transforme les donnees AlgoPython en DataFrame exploitable
-df = utils.AlgoPython_data(data)
+# df = utils.AlgoPython_data(data)
 
 # Tests
 
@@ -25,11 +27,9 @@ df = utils.AlgoPython_data(data)
 # show(df[df["code"] != ""])
 
 # Echantillonnage
-c = utils.cas1(df, sol)
-# c = utils.read_data("data/cas1.json")
-show(c)
+# c = utils.cas1(df, sol)
+c = utils.read_data("data/cas1.json")
+# show(c)
 
-# comp_t_t1 = c["comparaison_t_t1"]
-# ops = c["ops"]
-# print(comp_t_t1)
-# print(ops)
+all = utils.cas2(c)
+print(all)
