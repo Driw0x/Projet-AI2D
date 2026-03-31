@@ -448,57 +448,154 @@ def regle(ops=None, primary_code_errors=None, typology_based_code_error=None, ):
     """
     Affiche une interpretation textuelle simple des erreurs detectees.
     """
+    def path_trad(path):
+        path.reverse()
+        f = 1
+        for p in path[1:]:
+            if p == "For":
+                print(f"dans la {f}e boucle for qui se trouve ", end="")
+                f += 1
+            elif p.startswith("For"):
+                print(f"dans la {int(p.split('[')[-1][0]) + 1}e boucle for qui se trouve ", end="")
+                f = 0
+            elif p.startswith("Call"):
+                print(f"dans l'argument de la fonction {p.split(': ')[-1]} ", end="")
+            elif p.startswith("Module"):
+                print("dans le code")
+        print()
+
+    cas = set()
     if ops != None:
         pass
     elif primary_code_errors != None:
+        """
+        Pas exploitable: 'MISSING_VARIABLE', 'UNNECESSARY_VAR', 'VARIABLE_MISMATCH', 
+        'INCORRECT_STATEMENT_POSITION_FOR',
+
+        'MISSING_CONST_VALUE', 'UNNECESSARY_CONST_VALUE', 
+        'MISSING_IF_STATEMENT', 'UNNECESSARY_CONDITIONAL', 'NODE_TYPE_MISMATCH', 
+        'UNNECESSARY_ASSIGN_STATEMENT', 'MISSING_ASSIGN_STATEMENT', 
+        'INCORRECT_STATEMENT_POSITION_FUNCTION', 'INCORRECT_OPERATION_IN_ASSIGN', 
+        'UNNECESSARY_ARGUMENT'
+        """
         for errors in primary_code_errors:
-            if errors[0].startswith("Missing"):
-                print("Ajout")
-            elif errors[0].startswith("UNNECESSARY"):
-                print("Suppression")
-            else:
-                print("Mise à jour")
+            path = errors[-1].split(" > ")
+            match errors[0]:
+                case "MISSING_CALL_STATEMENT" | "MISSING_FOR_LOOP":
+                    if path[-1].startswith(errors[1]):
+                        print(f"Ajout d'un appel à {errors[1].split(' ')[-1].lower()} ", end="")
+                        path_trad(path)
+                    else:
+                        # Ce cas sera traité par d'autre erreur
+                        pass
+                case "UNNECESSARY_CALL_STATEMENT":
+                    if len(errors) == 3:
+                        print(f"Suppression d'un appel à {errors[1].split(': ')[-1]} ", end="")
+                    else:
+                        print(f"Appel à {errors[2]} sur la position de l'appel à {errors[1]} ", end="")
+                    path_trad(path)
+                case "UNNECESSARY_FUNCTION":
+                    """
+                    Cas critique:
+                    "code_t": "def hexagone():\n    for k in range(6):\n        avancer(2)\n        tourner(60)\n    tourner(60)\n",
+                    "code_t_1": "def hexagone():\n    avancer(2)\n    tourner(60)\nhexagone()\n",
+                    "UNNECESSARY_FUNCTION",
+                    "hexagone",
+                    "Module > Function: hexagone[0]"
+                    """
+                    print(f"Suppression de la fonction {errors[1]}")
+                case 'INCORRECT_STATEMENT_POSITION_IF':
+                    print("Changement de la position du if ", end="")
+                    path_trad(path)
+                case 'MISSING_OPERATION':
+                    print(f"Ajout de l'opération {errors[1].split(': ')[-1]} ", end="")
+                    path_trad(path)
+                case 'UNNECESSARY_VARIABLE':
+                    if not path[-2].startswith("Condition:"):
+                        print("Probleme d'appel de fonction ", end="")
+                        path_trad(path)
+                case 'UNNECESSARY_OPERATION':
+                    if len(errors) == 3:
+                        print(f"Suppression de l'opération {errors[1]} ", end="")
+                    else:
+                        print(f"Changement de l'opération {errors[1]} en {errors[2]} ")
+                    path_trad(path)
+                case 'MISSING_FUNCTION_DEFINITION':
+                    print(f"Ajout de {errors[1].split(": ")[-1]} ")
+                    path_trad(path)
+                case 'INCORRECT_STATEMENT_POSITION_CALL':
+                    print(f"Changement de position de l'appel à {errors[1].lower()} ", end="")
+                    path_trad(path)
+                case 'UNNECESSARY_FOR_LOOP':
+                    print(f"Supression de la {int(errors[2].split(" > ")[-1].split("[")[-1][0])}e boucle ", end="")
+                    path_trad
+                case 'CONST_VALUE_MISMATCH':
+                    print(f"Changement de la constante {errors[1]} en {errors[2]} ", end="")
+                case _:
+                    cas.add(errors[0])
+        
     elif typology_based_code_error != None:
-        cas = set()
         for errors in typology_based_code_error:
             if errors.startswith("F_CALL_MISSING"):
                 print(f"Ajout d'un appel à la fonction {errors.split('_')[-1]}")
             elif errors.startswith("F_CALL_UNNECESSARY"):
                 print(f"Suppression d'un appel à la fonction {errors.split('_')[-1]}")
-            else:
-                """
-                'F_CALL_INCORRECT_POSITION_AVANCER'
-                'LO_BODY_ERROR', 'EXP_ERROR_ASSIGNMENT_MISSING'
-                'F_CALL_PRINT_ERROR_ARG', 'F_CALL_COULEUR_ERROR'
-                'F_CALL_INCORRECT_POSITION_PRINT', 'F_CALL_BAS_ERROR'
-                'F_CALL_HAUT_ERROR', 'EXP_ERROR_OPERATOR', 'LO_FOR_NUMBER_ITERATION_ERROR'
-                'F_DEFINITION_MISSING', 'EXP_ERROR_OPERANDS', 'F_CALL_ARC_ERROR'
-                'F_CALL_INCORRECT_POSITION_ARC', 'F_CALL_INCORRECT_POSITION_TOURNER'
-                'F_CALL_INCORRECT_POSITION_POSER', 'F_CALL_INCORRECT_POSITION_LEVER'
-                'LO_FOR_MISPLACED', 'F_CALL_AVANCER_ERROR', 'F_CALL_GAUCHE_ERROR'
-                'F_CALL_TOURNER_ERROR', 'LO_BODY_MISSING_NOT_PRESENT_ANYWHERE'
-                'LO_FOR_UNNECESSARY', 'EXP_ERROR_ASSIGNMENT_UNNECESSARY'
-                'F_CALL_DROITE_ERROR', 'LO_FOR_MISSING', 'F_CALL_INCORRECT_POSITION_COULEUR'
-                'F_CALL_INCORRECT_POSITION_BAS', 'F_CALL_INCORRECT_POSITION_DROITE'
-                'LO_BODY_MISPLACED', 'EXP_ERROR_OPERATION', 'F_CALL_INCORRECT_POSITION_GAUCHE'
-                'CS_MISSING', 'LO_FOR_NUMBER_ITERATION_ERROR_UNDER2'
-                'F_CALL_INCORRECT_POSITION_HAUT', 'F_DEFINITION_UNNECESSARY'
-                """
-                print(f"Cas pas traite: {errors}")
-                cas.add(errors)
-        return cas
+            elif errors.startswith("F_CALL_INCORRECT_POSITION"):
+                # Position exacte dans la partie primary
+                print(f"Changement de position de la fonction {errors.split('_')[-1]}")
+            elif (errors.startswith("F_CALL") and errors.endswith("_ERROR")) or errors == "F_CALL_PRINT_ERROR_ARG":
+                print(f"Changement d'argument dans la fonction {errors.split('_')[-2]}")
+            elif errors.startswith("F_DEFINITION"):
+                if errors.endswith("MISSING"):
+                    # L'info de la fonction qui a été ajouté sera dans la partie primary
+                    print("Ajout d'une fonction")
+                elif errors.endswith("UNNECESSARY"):
+                    print("Suppression d'une fonction")
+                else:
+                    print("Cas pas traité", errors)
+            match errors:
+                case "LO_FOR_MISPLACED":
+                    print("Modification d'une boucle for (potentiellement un ajout)")
+                case "LO_FOR_MISSING":
+                    print("Ajout d'une boucle for")
+                case 'LO_FOR_UNNECESSARY':
+                    print("Suppression d'une boucle for")
+                case 'LO_BODY_MISSING_NOT_PRESENT_ANYWHERE':
+                    print("Modification du corps d'une boucle for (potentiellement supprimée)")
+                case 'LO_FOR_NUMBER_ITERATION_ERROR':
+                    print("Différence sur le nombre d'itération dans une boucle")
+                case 'LO_FOR_NUMBER_ITERATION_ERROR_UNDER2':
+                    print("Différence sur le nombre d'itération < 2 dans une boucle")
+                case 'LO_BODY_MISPLACED':
+                    print("Modification de l'ordre des appels dans le code")
+                case 'CS_MISSING':
+                    # Pas sur
+                    print("Ajout d'une structure de comparaison")
+                case 'EXP_ERROR_ASSIGNMENT_MISSING':
+                    print("Ajout d'une assigration de valeur à une variable")
+                case _:
+                    cas.add(errors)
+
+            """
+            Cas à traiter avec primary de préférence: EXP_ERROR_OPERATOR, LO_BODY_ERROR,
+            EXP_ERROR_OPERATION, EXP_ERROR_OPERANDS
+
+            Cas unitaire sur 2025 (à revoir): 'EXP_ERROR_ASSIGNMENT_UNNECESSARY'
+            """
+    return cas
                 
 def cas2(c):
     primary_code_errors = c["primary_code_errors"]
     typology_based_code_error = c["typology_based_code_error"]
+    all = set()
+    for i in range(len(primary_code_errors)):
+        all = all | regle(primary_code_errors=primary_code_errors[i])
+        # print(f"Fin {i}")
+        # print()
 
-    # for i in range(len(primary_code_errors)):
-    #     regle(primary_code_errors=primary_code_errors[i])
+    for i in range(len(typology_based_code_error)):
+        all = all | regle(typology_based_code_error=typology_based_code_error[i])
     #     print(f"Fin {i}")
     #     print()
-    all = set()
-    for i in range(len(typology_based_code_error)):
-        print("Liste",typology_based_code_error[i])
-        all = all | (regle(typology_based_code_error=typology_based_code_error[i]))
-        print(f"Fin {i}")
-    return all
+
+    print(all)
