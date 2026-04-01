@@ -456,7 +456,8 @@ def regle(ops=None, primary_code_errors=None, typology_based_code_error=None, ):
                 print(f"dans la {f}e boucle for qui se trouve ", end="")
                 f += 1
             elif p.startswith("For"):
-                print(f"dans la {int(p.split('[')[-1][0]) + 1}e boucle for qui se trouve ", end="")
+                idx = int(p.split('[')[-1].split(']')[0]) + 1
+                print(f"dans la {idx}e boucle for qui se trouve ", end="")
                 f = 0
             elif p.startswith("Call"):
                 print(f"dans l'argument de la fonction {p.split(': ')[-1]} ", end="")
@@ -465,18 +466,19 @@ def regle(ops=None, primary_code_errors=None, typology_based_code_error=None, ):
         print()
 
     cas = set()
-    if ops != None:
+    if ops is not None:
         pass
-    elif primary_code_errors != None:
+    elif primary_code_errors is not None:
         """
         Pas exploitable: 'MISSING_VARIABLE', 'UNNECESSARY_VAR', 'VARIABLE_MISMATCH', 
-        'INCORRECT_STATEMENT_POSITION_FOR',
+        'INCORRECT_STATEMENT_POSITION_FOR', 'MISSING_CONST_VALUE', 'UNNECESSARY_CONST_VALUE',
+        'NODE_TYPE_MISMATCH', 
+ 
+        'UNNECESSARY_ASSIGN_STATEMENT': Assignation var inutile
+        'MISSING_ASSIGN_STATEMENT': Ajout assignation val à var
 
-        'MISSING_CONST_VALUE', 'UNNECESSARY_CONST_VALUE', 
-        'MISSING_IF_STATEMENT', 'UNNECESSARY_CONDITIONAL', 'NODE_TYPE_MISMATCH', 
-        'UNNECESSARY_ASSIGN_STATEMENT', 'MISSING_ASSIGN_STATEMENT', 
-        'INCORRECT_STATEMENT_POSITION_FUNCTION', 'INCORRECT_OPERATION_IN_ASSIGN', 
-        'UNNECESSARY_ARGUMENT'
+        'INCORRECT_OPERATION_IN_ASSIGN' ???
+        'UNNECESSARY_ARGUMENT': suppression d'un argument d'une fonction (potentiellement la fonction aussi)
         """
         for errors in primary_code_errors:
             path = errors[-1].split(" > ")
@@ -521,20 +523,30 @@ def regle(ops=None, primary_code_errors=None, typology_based_code_error=None, ):
                         print(f"Changement de l'opération {errors[1]} en {errors[2]} ")
                     path_trad(path)
                 case 'MISSING_FUNCTION_DEFINITION':
-                    print(f"Ajout de {errors[1].split(": ")[-1]} ")
+                    print(f"Ajout de {errors[1].split(': ')[-1]} ")
                     path_trad(path)
                 case 'INCORRECT_STATEMENT_POSITION_CALL':
                     print(f"Changement de position de l'appel à {errors[1].lower()} ", end="")
                     path_trad(path)
                 case 'UNNECESSARY_FOR_LOOP':
-                    print(f"Supression de la {int(errors[2].split(" > ")[-1].split("[")[-1][0])}e boucle ", end="")
-                    path_trad
+                    print(f"Supression de la boucle for ", end="")
+                    path_trad(path)
                 case 'CONST_VALUE_MISMATCH':
-                    print(f"Changement de la constante {errors[1]} en {errors[2]} ", end="")
+                    print(f"Changement de la constante {errors[1].split(': ')[-1]} en {errors[2].split(': ')[-1]} ", end="")
+                    path_trad(path)
+                case 'MISSING_IF_STATEMENT':
+                    print(f"Ajout d'une condition ", end="")
+                    path_trad(path)
+                case 'UNNECESSARY_CONDITIONAL':
+                    print(f"Suppression d'une condition ", end="")
+                    path_trad(path)
+                case 'INCORRECT_STATEMENT_POSITION_FUNCTION':
+                    print(f"Changement de la position de l'appel à {errors[1].lower()}")
+                    path_trad(path)
                 case _:
                     cas.add(errors[0])
         
-    elif typology_based_code_error != None:
+    elif typology_based_code_error is not None:
         for errors in typology_based_code_error:
             if errors.startswith("F_CALL_MISSING"):
                 print(f"Ajout d'un appel à la fonction {errors.split('_')[-1]}")
@@ -593,8 +605,8 @@ def cas2(c):
         # print(f"Fin {i}")
         # print()
 
-    for i in range(len(typology_based_code_error)):
-        all = all | regle(typology_based_code_error=typology_based_code_error[i])
+    # for i in range(len(typology_based_code_error)):
+    #     all = all | regle(typology_based_code_error=typology_based_code_error[i])
     #     print(f"Fin {i}")
     #     print()
 

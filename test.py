@@ -6,11 +6,11 @@ from pandasgui import show
 # Lecture des donnees
 
 # lit le fichier brut
-# data = utils.read_data("data/2025.json")
-# sol = utils.read_data("data/exercises.json")
+data = utils.read_data("data/2025.json")
+sol = utils.read_data("data/exercises.json")
 
 # transforme les donnees AlgoPython en DataFrame exploitable
-# df = utils.AlgoPython_data(data)
+df = utils.AlgoPython_data(data)
 
 # Tests
 
