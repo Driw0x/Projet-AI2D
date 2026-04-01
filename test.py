@@ -1,16 +1,15 @@
 import utils
-import ast
-from tqdm import trange
+import numpy as np
 from pandasgui import show
 
 # Lecture des donnees
 
 # lit le fichier brut
-data = utils.read_data("data/2025.json")
-sol = utils.read_data("data/exercises.json")
+# data = utils.read_data("data/2025.json")
+# sol = utils.read_data("data/exercises.json")
 
 # transforme les donnees AlgoPython en DataFrame exploitable
-df = utils.AlgoPython_data(data)
+# df = utils.AlgoPython_data(data)
 
 # Tests
 
@@ -28,19 +27,37 @@ df = utils.AlgoPython_data(data)
 
 # Echantillonnage
 # c = utils.cas1(df, sol)
-c = utils.read_data("data/cas1.json")
+# c = utils.read_data("data/cas1_2022.json")
 # show(c)
 
-utils.cas2(c)
+# c2 = utils.cas2(c)
+c2 = utils.read_data("data/cas2_2022.json")
+# show(c2)
 
-all_primary = {'MISSING_CALL_STATEMENT', 'UNNECESSARY_FUNCTION', 'UNNECESSARY_VARIABLE', 'MISSING_FUNCTION_DEFINITION', 'UNNECESSARY_CONDITIONAL', 'MISSING_CONST_VALUE', 'UNNECESSARY_FOR_LOOP', 'MISSING_ASSIGN_STATEMENT', 'INCORRECT_STATEMENT_POSITION_FOR', 'MISSING_FOR_LOOP', 'INCORRECT_OPERATION_IN_ASSIGN', 'MISSING_VARIABLE', 'UNNECESSARY_ARGUMENT', 'UNNECESSARY_CONST_VALUE', 'MISSING_IF_STATEMENT', 'MISSING_OPERATION', 'NODE_TYPE_MISMATCH', 'UNNECESSARY_CALL_STATEMENT', 'VARIABLE_MISMATCH', 'UNNECESSARY_OPERATION', 'INCORRECT_STATEMENT_POSITION_CALL', 'INCORRECT_STATEMENT_POSITION_IF', 'UNNECESSARY_VAR', 'CONST_VALUE_MISMATCH', 'UNNECESSARY_ASSIGN_STATEMENT', 'INCORRECT_STATEMENT_POSITION_FUNCTION'}
-all_typo = {'F_CALL_AVANCER_ERROR', 'F_CALL_UNNECESSARY_ARC', 'F_CALL_INCORRECT_POSITION_BAS', 'F_CALL_MISSING_AVANCER', 'F_CALL_UNNECESSARY_DROITE', 'F_CALL_UNNECESSARY_GAUCHE', 'F_CALL_INCORRECT_POSITION_GAUCHE', 'EXP_ERROR_OPERATOR', 'F_CALL_MISSING_TOURNER', 'F_CALL_MISSING', 'F_CALL_MISSING_BAS', 'EXP_ERROR_ASSIGNMENT_UNNECESSARY', 'F_CALL_MISSING_LEVER', 'F_CALL_MISSING_COULEUR', 'F_CALL_INCORRECT_POSITION_AVANCER', 'CS_MISSING', 'F_CALL_MISSING_ARC', 'F_CALL_INCORRECT_POSITION_PRINT', 'F_CALL_MISSING_DROITE', 'F_CALL_MISSING_POSER', 'EXP_ERROR_OPERATION', 'F_CALL_MISSING_HAUT', 'F_CALL_INCORRECT_POSITION_COULEUR', 'EXP_ERROR_OPERANDS', 'F_CALL_INCORRECT_POSITION_DROITE', 'LO_FOR_MISSING', 'LO_BODY_MISPLACED', 'F_CALL_UNNECESSARY_HAUT', 'F_CALL_GAUCHE_ERROR', 'F_CALL_MISSING_GAUCHE', 'F_CALL_INCORRECT_POSITION_POSER', 'F_CALL_UNNECESSARY_PRINT', 'F_CALL_PRINT_ERROR_ARG', 'F_CALL_ARC_ERROR', 'F_CALL_UNNECESSARY_BAS', 'F_CALL_INCORRECT_POSITION_LEVER', 'F_CALL_INCORRECT_POSITION_ARC', 'EXP_ERROR_ASSIGNMENT_MISSING', 'F_CALL_UNNECESSARY_TOURNER', 'F_CALL_INCORRECT_POSITION_TOURNER', 'F_CALL_COULEUR_ERROR', 'LO_FOR_UNNECESSARY', 'LO_BODY_MISSING_NOT_PRESENT_ANYWHERE', 'F_CALL_UNNECESSARY', 'F_CALL_DROITE_ERROR', 'F_CALL_UNNECESSARY_AVANCER', 'F_CALL_TOURNER_ERROR', 'F_CALL_UNNECESSARY_COULEUR', 'F_CALL_BAS_ERROR', 'F_CALL_UNNECESSARY_POSER', 'LO_FOR_MISPLACED', 'LO_FOR_NUMBER_ITERATION_ERROR', 'F_DEFINITION_UNNECESSARY', 'LO_FOR_NUMBER_ITERATION_ERROR_UNDER2', 'F_CALL_HAUT_ERROR', 'F_DEFINITION_MISSING', 'F_CALL_UNNECESSARY_LEVER', 'F_CALL_INCORRECT_POSITION_HAUT', 'F_CALL_MISSING_PRINT', 'LO_BODY_ERROR'}
+id = np.random.choice(c2["id"], 1)[0]
+ex = np.random.choice(c2[c2["id"] == id]["exercice"], 1)[0]
+cas = c2[(c2["id"] == id) & (c2["exercice"] == ex)].reset_index(drop=True)
 
-# filtre_primary = set()
-# for i in {'NODE_TYPE_MISMATCH', 'INCORRECT_STATEMENT_POSITION_IF', 'UNNECESSARY_FUNCTION', 'UNNECESSARY_CALL_STATEMENT', 'UNNECESSARY_ASSIGN_STATEMENT', 'UNNECESSARY_FOR_LOOP', 'UNNECESSARY_ARGUMENT', 'CONST_VALUE_MISMATCH', 'UNNECESSARY_CONST_VALUE', 'VARIABLE_MISMATCH', 'INCORRECT_OPERATION_IN_ASSIGN', 'UNNECESSARY_OPERATION', 'UNNECESSARY_VARIABLE', 'INCORRECT_STATEMENT_POSITION_FOR', 'INCORRECT_STATEMENT_POSITION_CALL', 'INCORRECT_STATEMENT_POSITION_FUNCTION', 'UNNECESSARY_VAR', 'UNNECESSARY_CONDITIONAL'}:
-#     if i.startswith("MISSING"):
-#         print(i, end=" ")
-#     else:
-#         filtre_primary.add(i)
-# print()
-# print(filtre_primary)
+print(f"Information sur les tentatives de l'user {id} sur l'exercice {ex}")
+for i in range(len(cas)):
+    primary_list = cas.loc[i, "primary_code_errors_text"]
+    typology_list = cas.loc[i, "typology_based_code_error_text"]
+    print(f"Tentative {i+1} vs {i+2}")
+    print(f"Code {i+1}:")
+    print(cas.loc[i, "code_t"])
+    print()
+    print(f"Code {i+2}:")
+    print(cas.loc[i, "code_t_1"])
+    print()
+    if len(typology_list) > 0:
+        print("Modification simple")
+        for k in range(len(typology_list)):
+            print(typology_list[k])
+        print()
+    if len(primary_list) > 0:
+        print("Modification détaillé")
+        for j in range(len(primary_list)):
+            print(primary_list[j])
+    if len(primary_list) == 0 and  len(typology_list) == 0:
+        print("Pas de modification")
+    print("______________________________")
