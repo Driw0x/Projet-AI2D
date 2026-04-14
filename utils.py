@@ -248,7 +248,10 @@ def code_to_zss_node(code):
     """
     Transforme un code Python en arbre compatible avec Zhang-Shasha.
     """
-    return Wrapper(code_to_ast(code))
+    tree = code_to_ast(code)
+    if tree is None:
+        return None
+    return Wrapper(tree)
 
 def get_children(node):
     """
@@ -653,3 +656,410 @@ def cas2(c):
     save_dataset_to_json(c2, "cas2.json")
 
     return c2
+
+# Classification
+def extract_score(comp):
+    """
+    Extrait le score depuis une structure du type [score, details].
+    Retourne NaN si le format est invalide.
+    """
+    try:
+        if isinstance(comp, (list, tuple)) and len(comp) > 0:
+            return float(comp[0])
+        return np.nan
+    except Exception:
+        return np.nan
+
+def profil_progression(mean_progress,
+                       strong_progress_threshold=1.0,
+                       weak_progress_threshold=0.2):
+    if pd.isna(mean_progress):
+        return "inconnu"
+    if mean_progress >= strong_progress_threshold:
+        return "progression_rapide"
+    if mean_progress >= weak_progress_threshold:
+        return "progression_lente"
+    if mean_progress >= 0:
+        return "stagnation"
+    return "regression"
+
+
+def profil_modification(mean_zss,
+                        low_zss_threshold=3.0,
+                        high_zss_threshold=8.0):
+    if pd.isna(mean_zss):
+        return "inconnu"
+    if mean_zss <= low_zss_threshold:
+        return "petit_ajusteur"
+    if mean_zss <= high_zss_threshold:
+        return "modificateur_modere"
+    return "gros_restructurateur"
+
+
+def profil_tentatives(nb_tentatives,
+                      fast_attempt_threshold=3,
+                      many_attempts_threshold=6):
+    if pd.isna(nb_tentatives):
+        return "inconnu"
+    if nb_tentatives <= fast_attempt_threshold:
+        return "resolution_rapide"
+    if nb_tentatives <= many_attempts_threshold:
+        return "resolution_moyenne"
+    return "resolution_longue"
+
+
+def profil_temps(mean_temps,
+                 fast_time_threshold=30,
+                 medium_time_threshold=120):
+    """
+    Retourne un profil de temps.
+    Si le temps n'est pas renseigné, retourne 'non_renseigne'.
+    """
+    if pd.isna(mean_temps):
+        return "non_renseigne"
+    if mean_temps <= fast_time_threshold:
+        return "rapide"
+    if mean_temps <= medium_time_threshold:
+        return "modere"
+    return "lent"
+
+def classe_finale_from_profils(profil_prog, profil_modif, profil_temps, profil_tent):
+    # Cas où le temps n'est pas disponible : on l'ignore
+    if profil_temps == "non_renseigne":
+        if (
+            profil_prog == "progression_rapide"
+            and profil_modif == "petit_ajusteur"
+            and profil_tent == "resolution_rapide"
+        ):
+            return "expert_progressif"
+
+        if (
+            profil_prog in ["progression_rapide", "progression_lente"]
+            and profil_modif in ["petit_ajusteur", "modificateur_modere"]
+            and profil_tent in ["resolution_rapide", "resolution_moyenne"]
+        ):
+            return "reviseur_methodique"
+
+        if (
+            profil_prog in ["progression_rapide", "progression_lente"]
+            and profil_modif == "gros_restructurateur"
+        ):
+            return "gros_restructurateur"
+
+        if (
+            profil_prog in ["stagnation", "regression"]
+            and profil_tent == "resolution_longue"
+        ):
+            return "bloque"
+
+        if (
+            profil_prog in ["stagnation", "regression"]
+            and profil_modif == "gros_restructurateur"
+        ):
+            return "explorateur_chaotique"
+
+        return "profil_intermediaire"
+
+    # Cas où le temps est disponible : on l'utilise
+    if (
+        profil_prog == "progression_rapide"
+        and profil_modif == "petit_ajusteur"
+        and profil_tent == "resolution_rapide"
+        and profil_temps == "rapide"
+    ):
+        return "expert_progressif"
+
+    if (
+        profil_prog in ["progression_rapide", "progression_lente"]
+        and profil_modif in ["petit_ajusteur", "modificateur_modere"]
+        and profil_tent in ["resolution_rapide", "resolution_moyenne"]
+        and profil_temps in ["rapide", "modere"]
+    ):
+        return "reviseur_methodique"
+
+    if (
+        profil_prog in ["progression_rapide", "progression_lente"]
+        and profil_modif == "gros_restructurateur"
+    ):
+        return "gros_restructurateur"
+
+    if (
+        profil_prog in ["stagnation", "regression"]
+        and profil_tent == "resolution_longue"
+        and profil_temps in ["modere", "lent"]
+    ):
+        return "bloque"
+
+    if (
+        profil_prog in ["stagnation", "regression"]
+        and profil_modif == "gros_restructurateur"
+    ):
+        return "explorateur_chaotique"
+
+    if profil_temps == "lent" and profil_prog == "progression_lente":
+        return "lent_mais_regulier"
+
+    return "profil_intermediaire"
+
+def pre_calcul(dfo, solution_df):
+    """
+    Construit un dataset allégé pour la classification des users.
+
+    Colonnes conservées :
+    - id
+    - exercice
+    - type_exercice
+    - t
+    - t_plus_1
+    - distance_zss
+    - score_t_solution
+    - score_t_plus_1_solution
+    - progression_solution
+    - temps_t
+    - temps_t_plus_1
+    - delta_temps
+    """
+    if "code" not in dfo.columns:
+        raise ValueError(f"Colonne 'code' absente. Colonnes disponibles : {dfo.columns.tolist()}")
+
+    if "temps_passe" not in dfo.columns:
+        raise ValueError(f"Colonne 'temps_passe' absente. Colonnes disponibles : {dfo.columns.tolist()}")
+
+    df = dfo[dfo["code"].notna() & (dfo["code"] != "")].copy()
+
+    couples = couples_valides(dfo)
+    df = df[df[["id_compte", "level_1"]].apply(tuple, axis=1).isin(couples)].copy()
+    solution_dict = build_solution_dict(solution_df)
+
+    lignes = []
+
+    user_groups = list(df.groupby("id_compte", sort=False))
+
+    for user_id, user_df in tqdm(
+        user_groups,
+        desc="Processing",
+        position=0,
+        leave=True,
+        dynamic_ncols=True
+    ):
+        ex_groups = list(user_df.groupby("level_1", sort=False))
+
+        for ex, group in tqdm(
+            ex_groups,
+            desc=f"User {user_id}",
+            position=1,
+            leave=False
+        ):
+            group = group.reset_index(drop=True)
+
+            if len(group) < 2:
+                continue
+
+            sol_info = solution_dict.get(ex)
+
+            if sol_info is not None:
+                correct_codes = sol_info.get("correctCodes", [])
+                exercise_type = sol_info.get("exerciseType", np.nan)
+
+                ast_solutions = []
+                for sol in correct_codes:
+                    ast_sol = code_to_ast(sol)
+                    if ast_sol is not None:
+                        ast_solutions.append(ast_sol)
+            else:
+                exercise_type = np.nan
+                ast_solutions = []
+
+            zss_cache = {}
+
+            for i in tqdm(
+                range(len(group) - 1),
+                desc=f"Exercice {ex}",
+                position=2,
+                leave=False
+            ):
+                code_t = group.loc[i, "code"]
+                code_t_1 = group.loc[i + 1, "code"]
+
+                # 0 = temps non renseigné
+                temps_t = group.loc[i, "temps_passe"]
+                temps_t_1 = group.loc[i + 1, "temps_passe"]
+                temps_t = np.nan if pd.isna(temps_t) or temps_t == 0 else temps_t
+                temps_t_1 = np.nan if pd.isna(temps_t_1) or temps_t_1 == 0 else temps_t_1
+
+                if pd.notna(temps_t) and pd.notna(temps_t_1):
+                    delta_temps = temps_t_1 - temps_t
+                else:
+                    delta_temps = np.nan
+
+                try:
+                    tree_t = get_zss_tree(code_t, zss_cache)
+                    tree_t_1 = get_zss_tree(code_t_1, zss_cache)
+
+                    if tree_t is not None and tree_t_1 is not None:
+                        distance_zss, _ = distance(tree_t, tree_t_1, get_children)
+                    else:
+                        distance_zss = np.nan
+                except Exception as err:
+                    tqdm.write(f"Erreur distance user={user_id}, ex={ex}, t={i+1}: {err}")
+                    distance_zss = np.nan
+
+                ast_t = code_to_ast(code_t)
+                ast_t_1 = code_to_ast(code_t_1)
+
+                try:
+                    if ast_t is not None and ast_solutions:
+                        comp_t_sol = prog_vs_answer(ast_t, ast_solutions)
+                    else:
+                        comp_t_sol = [0, {}]
+                except Exception as err:
+                    tqdm.write(f"Erreur comparaison t->solution user={user_id}, ex={ex}, t={i+1}: {err}")
+                    comp_t_sol = [0, {}]
+
+                try:
+                    if ast_t_1 is not None and ast_solutions:
+                        comp_t1_sol = prog_vs_answer(ast_t_1, ast_solutions)
+                    else:
+                        comp_t1_sol = [0, {}]
+                except Exception as err:
+                    tqdm.write(f"Erreur comparaison t+1->solution user={user_id}, ex={ex}, t={i+2}: {err}")
+                    comp_t1_sol = [0, {}]
+
+                score_t_sol = extract_score(comp_t_sol)
+                score_t1_sol = extract_score(comp_t1_sol)
+                progression_sol = score_t1_sol - score_t_sol
+
+                lignes.append({
+                    "id": user_id,
+                    "exercice": ex,
+                    "type_exercice": exercise_type,
+                    "t": i + 1,
+                    "t_plus_1": i + 2,
+                    "distance_zss": distance_zss,
+                    "score_t_solution": score_t_sol,
+                    "score_t_plus_1_solution": score_t1_sol,
+                    "progression_solution": progression_sol,
+                    "temps_t": temps_t,
+                    "temps_t_plus_1": temps_t_1,
+                    "delta_temps": delta_temps
+                })
+
+    dataset = pd.DataFrame(lignes)
+
+    save_dataset_to_json(dataset, "pre_calcul.json")
+
+    return dataset
+
+def build_user_classification(dataset):
+    df = dataset.copy()
+
+    user_stats = (
+        df.groupby("id", dropna=False)
+        .agg(
+            mean_progress=("progression_solution", "mean"),
+            mean_zss=("distance_zss", "mean"),
+            max_tentative=("t_plus_1", "max"),
+            nb_transitions=("id", "size"),
+            mean_delta_temps=("delta_temps", "mean"),
+            nb_temps_valides=("delta_temps", lambda s: s.notna().sum())
+        )
+        .reset_index()
+    )
+
+    user_stats["profil_progression"] = user_stats["mean_progress"].apply(profil_progression)
+    user_stats["profil_modification"] = user_stats["mean_zss"].apply(profil_modification)
+    user_stats["profil_tentatives"] = user_stats["max_tentative"].apply(profil_tentatives)
+
+    user_stats["profil_temps"] = user_stats.apply(
+        lambda row: "non_renseigne"
+        if row["nb_temps_valides"] == 0
+        else profil_temps(row["mean_delta_temps"]),
+        axis=1
+    )
+
+    user_stats["classe"] = user_stats.apply(
+        lambda row: classe_finale_from_profils(
+            row["profil_progression"],
+            row["profil_modification"],
+            row["profil_temps"],
+            row["profil_tentatives"]
+        ),
+        axis=1
+    )
+
+    save_dataset_to_json(dataset, "classif_user.json")
+
+    return user_stats
+
+def build_user_exercice_classification(dataset):
+    """
+    Classification par couple (user, exercice) avec profils détaillés.
+
+    Colonnes attendues dans dataset :
+    - id
+    - exercice
+    - type_exercice
+    - progression_solution
+    - distance_zss
+    - t_plus_1
+    - delta_temps
+
+    Retour
+    ------
+    pandas.DataFrame
+        Colonnes :
+        - id
+        - exercice
+        - type_exercice
+        - mean_progress
+        - mean_zss
+        - max_tentative
+        - nb_transitions
+        - mean_delta_temps
+        - nb_temps_valides
+        - profil_progression
+        - profil_modification
+        - profil_tentatives
+        - profil_temps
+        - classe
+    """
+    df = dataset.copy()
+
+    stats = (
+        df.groupby(["id", "exercice"], dropna=False)
+        .agg(
+            type_exercice=("type_exercice", "first"),
+            mean_progress=("progression_solution", "mean"),
+            mean_zss=("distance_zss", "mean"),
+            max_tentative=("t_plus_1", "max"),
+            nb_transitions=("id", "size"),
+            mean_delta_temps=("delta_temps", "mean"),
+            nb_temps_valides=("delta_temps", lambda s: s.notna().sum())
+        )
+        .reset_index()
+    )
+
+    stats["profil_progression"] = stats["mean_progress"].apply(profil_progression)
+    stats["profil_modification"] = stats["mean_zss"].apply(profil_modification)
+    stats["profil_tentatives"] = stats["max_tentative"].apply(profil_tentatives)
+
+    stats["profil_temps"] = stats.apply(
+        lambda row: "non_renseigne"
+        if row["nb_temps_valides"] == 0
+        else profil_temps(row["mean_delta_temps"]),
+        axis=1
+    )
+
+    stats["classe"] = stats.apply(
+        lambda row: classe_finale_from_profils(
+            row["profil_progression"],
+            row["profil_modification"],
+            row["profil_temps"],
+            row["profil_tentatives"]
+        ),
+        axis=1
+    )
+
+    save_dataset_to_json(dataset, "classif_user_ex.json")
+
+    return stats
