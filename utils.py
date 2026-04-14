@@ -670,66 +670,177 @@ def extract_score(comp):
     except Exception:
         return np.nan
 
-def profil_progression(mean_progress,
-                       strong_progress_threshold=1.0,
-                       weak_progress_threshold=0.2):
+def remove_outliers_iqr(series: pd.Series) -> pd.Series:
+    """
+    Retire les valeurs extrêmes avec la règle IQR.
+    """
+    s = series.dropna()
+    if len(s) == 0:
+        return s
+
+    q1 = s.quantile(0.25)
+    q3 = s.quantile(0.75)
+    iqr = q3 - q1
+
+    if pd.isna(iqr) or iqr == 0:
+        return s
+
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+
+    filtered = s[(s >= lower) & (s <= upper)]
+    return filtered if len(filtered) > 0 else s
+
+
+def compute_tertile_thresholds(series: pd.Series, fallback=(0.33, 0.66)):
+    """
+    Calcule les seuils tertiles après retrait des outliers.
+    """
+    s = remove_outliers_iqr(series)
+
+    if len(s) == 0:
+        return fallback
+
+    t1 = s.quantile(1 / 3)
+    t2 = s.quantile(2 / 3)
+    return t1, t2
+
+
+def compute_dynamic_thresholds(user_stats: pd.DataFrame) -> dict:
+    """
+    Calcule tous les seuils dynamiques à partir des stats agrégées.
+    """
+    thresholds = {}
+
+    thresholds["progress"] = compute_tertile_thresholds(
+        user_stats["mean_progress"],
+        fallback=(0.0, 1.0)
+    )
+
+    thresholds["zss"] = compute_tertile_thresholds(
+        user_stats["mean_zss"],
+        fallback=(3.0, 8.0)
+    )
+
+    thresholds["tentatives"] = compute_tertile_thresholds(
+        user_stats["max_tentative"],
+        fallback=(3, 6)
+    )
+
+    thresholds["temps"] = compute_tertile_thresholds(
+        user_stats["mean_delta_temps"],
+        fallback=(30, 120)
+    )
+
+    return thresholds
+
+
+def profil_progression_dynamic(mean_progress, thresholds):
+    """
+    Profil de progression avec seuils dynamiques.
+    """
     if pd.isna(mean_progress):
         return "inconnu"
-    if mean_progress >= strong_progress_threshold:
-        return "progression_rapide"
-    if mean_progress >= weak_progress_threshold:
-        return "progression_lente"
-    if mean_progress >= 0:
+
+    t1, t2 = thresholds["progress"]
+
+    if mean_progress < 0:
+        return "regression"
+    if mean_progress <= t1:
         return "stagnation"
-    return "regression"
+    if mean_progress <= t2:
+        return "progression_lente"
+    return "progression_rapide"
 
 
-def profil_modification(mean_zss,
-                        low_zss_threshold=3.0,
-                        high_zss_threshold=8.0):
+def profil_modification_dynamic(mean_zss, thresholds):
+    """
+    Profil de modification avec seuils dynamiques.
+    """
     if pd.isna(mean_zss):
         return "inconnu"
-    if mean_zss <= low_zss_threshold:
+
+    t1, t2 = thresholds["zss"]
+
+    if mean_zss <= t1:
         return "petit_ajusteur"
-    if mean_zss <= high_zss_threshold:
+    if mean_zss <= t2:
         return "modificateur_modere"
     return "gros_restructurateur"
 
 
-def profil_tentatives(nb_tentatives,
-                      fast_attempt_threshold=3,
-                      many_attempts_threshold=6):
+def profil_tentatives_dynamic(nb_tentatives, thresholds):
+    """
+    Profil de tentatives avec seuils dynamiques.
+    """
     if pd.isna(nb_tentatives):
         return "inconnu"
-    if nb_tentatives <= fast_attempt_threshold:
+
+    t1, t2 = thresholds["tentatives"]
+
+    if nb_tentatives <= t1:
         return "resolution_rapide"
-    if nb_tentatives <= many_attempts_threshold:
+    if nb_tentatives <= t2:
         return "resolution_moyenne"
     return "resolution_longue"
 
 
-def profil_temps(mean_temps,
-                 fast_time_threshold=30,
-                 medium_time_threshold=120):
+def profil_temps_dynamic(mean_temps, nb_temps_valides, thresholds):
     """
-    Retourne un profil de temps.
-    Si le temps n'est pas renseigné, retourne 'non_renseigne'.
+    Profil de temps avec seuils dynamiques.
+    Ignore le temps s'il n'est pas renseigné.
     """
-    if pd.isna(mean_temps):
+    if nb_temps_valides == 0 or pd.isna(mean_temps):
         return "non_renseigne"
-    if mean_temps <= fast_time_threshold:
+
+    t1, t2 = thresholds["temps"]
+
+    if mean_temps <= t1:
         return "rapide"
-    if mean_temps <= medium_time_threshold:
+    if mean_temps <= t2:
         return "modere"
     return "lent"
 
-def classe_finale_from_profils(profil_prog, profil_modif, profil_temps, profil_tent):
-    # Cas où le temps n'est pas disponible : on l'ignore
+def profil_reussite_exercice(reussite_finale):
+    if pd.isna(reussite_finale):
+        return "inconnu"
+    return "reussi" if reussite_finale == 1 else "non_reussi"
+
+def profil_taux_reussite(taux_reussite, thresholds=None):
+    if pd.isna(taux_reussite):
+        return "inconnu"
+
+    if thresholds is None:
+        if taux_reussite >= 0.8:
+            return "forte_reussite"
+        if taux_reussite >= 0.5:
+            return "reussite_moyenne"
+        return "faible_reussite"
+
+    t1, t2 = thresholds
+    if taux_reussite <= t1:
+        return "faible_reussite"
+    if taux_reussite <= t2:
+        return "reussite_moyenne"
+    return "forte_reussite"
+
+def classe_finale_from_profils(profil_prog, profil_modif, profil_temps, profil_tent, profil_reussite=None):
+    if profil_reussite == "non_reussi":
+        if profil_prog in ["stagnation", "regression"]:
+            return "bloque"
+        if profil_modif == "gros_restructurateur":
+            return "explorateur_chaotique"
+
+    if profil_reussite == "faible_reussite":
+        if profil_prog in ["stagnation", "regression"]:
+            return "bloque"
+
     if profil_temps == "non_renseigne":
         if (
             profil_prog == "progression_rapide"
             and profil_modif == "petit_ajusteur"
             and profil_tent == "resolution_rapide"
+            and profil_reussite in [None, "reussi", "forte_reussite", "reussite_moyenne"]
         ):
             return "expert_progressif"
 
@@ -760,45 +871,6 @@ def classe_finale_from_profils(profil_prog, profil_modif, profil_temps, profil_t
 
         return "profil_intermediaire"
 
-    # Cas où le temps est disponible : on l'utilise
-    if (
-        profil_prog == "progression_rapide"
-        and profil_modif == "petit_ajusteur"
-        and profil_tent == "resolution_rapide"
-        and profil_temps == "rapide"
-    ):
-        return "expert_progressif"
-
-    if (
-        profil_prog in ["progression_rapide", "progression_lente"]
-        and profil_modif in ["petit_ajusteur", "modificateur_modere"]
-        and profil_tent in ["resolution_rapide", "resolution_moyenne"]
-        and profil_temps in ["rapide", "modere"]
-    ):
-        return "reviseur_methodique"
-
-    if (
-        profil_prog in ["progression_rapide", "progression_lente"]
-        and profil_modif == "gros_restructurateur"
-    ):
-        return "gros_restructurateur"
-
-    if (
-        profil_prog in ["stagnation", "regression"]
-        and profil_tent == "resolution_longue"
-        and profil_temps in ["modere", "lent"]
-    ):
-        return "bloque"
-
-    if (
-        profil_prog in ["stagnation", "regression"]
-        and profil_modif == "gros_restructurateur"
-    ):
-        return "explorateur_chaotique"
-
-    if profil_temps == "lent" and profil_prog == "progression_lente":
-        return "lent_mais_regulier"
-
     return "profil_intermediaire"
 
 def pre_calcul(dfo, solution_df):
@@ -818,12 +890,18 @@ def pre_calcul(dfo, solution_df):
     - temps_t
     - temps_t_plus_1
     - delta_temps
+    - statut_t
+    - statut_t_plus_1
+    - reussite_finale_exercice
     """
     if "code" not in dfo.columns:
         raise ValueError(f"Colonne 'code' absente. Colonnes disponibles : {dfo.columns.tolist()}")
 
     if "temps_passe" not in dfo.columns:
         raise ValueError(f"Colonne 'temps_passe' absente. Colonnes disponibles : {dfo.columns.tolist()}")
+
+    if "statut" not in dfo.columns:
+        raise ValueError(f"Colonne 'statut' absente. Colonnes disponibles : {dfo.columns.tolist()}")
 
     df = dfo[dfo["code"].notna() & (dfo["code"] != "")].copy()
 
@@ -872,6 +950,9 @@ def pre_calcul(dfo, solution_df):
 
             zss_cache = {}
 
+            # statut final de l'exercice = dernière tentative
+            reussite_finale_exercice = group.loc[len(group) - 1, "statut"]
+
             for i in tqdm(
                 range(len(group) - 1),
                 desc=f"Exercice {ex}",
@@ -881,7 +962,9 @@ def pre_calcul(dfo, solution_df):
                 code_t = group.loc[i, "code"]
                 code_t_1 = group.loc[i + 1, "code"]
 
-                # 0 = temps non renseigné
+                statut_t = group.loc[i, "statut"]
+                statut_t_1 = group.loc[i + 1, "statut"]
+
                 temps_t = group.loc[i, "temps_passe"]
                 temps_t_1 = group.loc[i + 1, "temps_passe"]
                 temps_t = np.nan if pd.isna(temps_t) or temps_t == 0 else temps_t
@@ -941,7 +1024,10 @@ def pre_calcul(dfo, solution_df):
                     "progression_solution": progression_sol,
                     "temps_t": temps_t,
                     "temps_t_plus_1": temps_t_1,
-                    "delta_temps": delta_temps
+                    "delta_temps": delta_temps,
+                    "statut_t": statut_t,
+                    "statut_t_plus_1": statut_t_1,
+                    "reussite_finale_exercice": reussite_finale_exercice
                 })
 
     dataset = pd.DataFrame(lignes)
@@ -952,6 +1038,23 @@ def pre_calcul(dfo, solution_df):
 
 def build_user_classification(dataset):
     df = dataset.copy()
+
+    # une ligne par couple (user, exercice) pour la réussite finale
+    reussite_ex = (
+        df.groupby(["id", "exercice"], dropna=False)
+        .agg(reussite_finale_exercice=("reussite_finale_exercice", "max"))
+        .reset_index()
+    )
+
+    taux_reussite_user = (
+        reussite_ex.groupby("id", dropna=False)
+        .agg(
+            taux_reussite=("reussite_finale_exercice", "mean"),
+            nb_exercices=("exercice", "size"),
+            nb_exercices_reussis=("reussite_finale_exercice", "sum")
+        )
+        .reset_index()
+    )
 
     user_stats = (
         df.groupby("id", dropna=False)
@@ -966,15 +1069,33 @@ def build_user_classification(dataset):
         .reset_index()
     )
 
-    user_stats["profil_progression"] = user_stats["mean_progress"].apply(profil_progression)
-    user_stats["profil_modification"] = user_stats["mean_zss"].apply(profil_modification)
-    user_stats["profil_tentatives"] = user_stats["max_tentative"].apply(profil_tentatives)
+    user_stats = user_stats.merge(taux_reussite_user, on="id", how="left")
 
+    thresholds = compute_dynamic_thresholds(user_stats)
+    success_thresholds = compute_tertile_thresholds(
+        user_stats["taux_reussite"],
+        fallback=(0.33, 0.66)
+    )
+
+    user_stats["profil_progression"] = user_stats["mean_progress"].apply(
+        lambda x: profil_progression_dynamic(x, thresholds)
+    )
+    user_stats["profil_modification"] = user_stats["mean_zss"].apply(
+        lambda x: profil_modification_dynamic(x, thresholds)
+    )
+    user_stats["profil_tentatives"] = user_stats["max_tentative"].apply(
+        lambda x: profil_tentatives_dynamic(x, thresholds)
+    )
     user_stats["profil_temps"] = user_stats.apply(
-        lambda row: "non_renseigne"
-        if row["nb_temps_valides"] == 0
-        else profil_temps(row["mean_delta_temps"]),
+        lambda row: profil_temps_dynamic(
+            row["mean_delta_temps"],
+            row["nb_temps_valides"],
+            thresholds
+        ),
         axis=1
+    )
+    user_stats["profil_reussite"] = user_stats["taux_reussite"].apply(
+        lambda x: profil_taux_reussite(x, success_thresholds)
     )
 
     user_stats["classe"] = user_stats.apply(
@@ -987,42 +1108,9 @@ def build_user_classification(dataset):
         axis=1
     )
 
-    save_dataset_to_json(user_stats, "classif_user.json")
-
-    return user_stats
+    return user_stats, thresholds, success_thresholds
 
 def build_user_exercice_classification(dataset):
-    """
-    Classification par couple (user, exercice) avec profils détaillés.
-
-    Colonnes attendues dans dataset :
-    - id
-    - exercice
-    - type_exercice
-    - progression_solution
-    - distance_zss
-    - t_plus_1
-    - delta_temps
-
-    Retour
-    ------
-    pandas.DataFrame
-        Colonnes :
-        - id
-        - exercice
-        - type_exercice
-        - mean_progress
-        - mean_zss
-        - max_tentative
-        - nb_transitions
-        - mean_delta_temps
-        - nb_temps_valides
-        - profil_progression
-        - profil_modification
-        - profil_tentatives
-        - profil_temps
-        - classe
-    """
     df = dataset.copy()
 
     stats = (
@@ -1034,21 +1122,32 @@ def build_user_exercice_classification(dataset):
             max_tentative=("t_plus_1", "max"),
             nb_transitions=("id", "size"),
             mean_delta_temps=("delta_temps", "mean"),
-            nb_temps_valides=("delta_temps", lambda s: s.notna().sum())
+            nb_temps_valides=("delta_temps", lambda s: s.notna().sum()),
+            reussite_finale_exercice=("reussite_finale_exercice", "max")
         )
         .reset_index()
     )
 
-    stats["profil_progression"] = stats["mean_progress"].apply(profil_progression)
-    stats["profil_modification"] = stats["mean_zss"].apply(profil_modification)
-    stats["profil_tentatives"] = stats["max_tentative"].apply(profil_tentatives)
+    thresholds = compute_dynamic_thresholds(stats)
 
+    stats["profil_progression"] = stats["mean_progress"].apply(
+        lambda x: profil_progression_dynamic(x, thresholds)
+    )
+    stats["profil_modification"] = stats["mean_zss"].apply(
+        lambda x: profil_modification_dynamic(x, thresholds)
+    )
+    stats["profil_tentatives"] = stats["max_tentative"].apply(
+        lambda x: profil_tentatives_dynamic(x, thresholds)
+    )
     stats["profil_temps"] = stats.apply(
-        lambda row: "non_renseigne"
-        if row["nb_temps_valides"] == 0
-        else profil_temps(row["mean_delta_temps"]),
+        lambda row: profil_temps_dynamic(
+            row["mean_delta_temps"],
+            row["nb_temps_valides"],
+            thresholds
+        ),
         axis=1
     )
+    stats["profil_reussite"] = stats["reussite_finale_exercice"].apply(profil_reussite_exercice)
 
     stats["classe"] = stats.apply(
         lambda row: classe_finale_from_profils(
@@ -1060,6 +1159,4 @@ def build_user_exercice_classification(dataset):
         axis=1
     )
 
-    save_dataset_to_json(stats, "classif_user_ex.json")
-
-    return stats
+    return stats, thresholds
