@@ -987,7 +987,7 @@ def build_user_classification(dataset):
         axis=1
     )
 
-    save_dataset_to_json(dataset, "classif_user.json")
+    save_dataset_to_json(user_stats, "classif_user.json")
 
     return user_stats
 
@@ -1060,6 +1060,6 @@ def build_user_exercice_classification(dataset):
         axis=1
     )
 
-    save_dataset_to_json(dataset, "classif_user_ex.json")
+    save_dataset_to_json(stats, "classif_user_ex.json")
 
     return stats
