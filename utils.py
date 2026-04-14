@@ -806,23 +806,16 @@ def profil_reussite_exercice(reussite_finale):
         return "inconnu"
     return "reussi" if reussite_finale == 1 else "non_reussi"
 
-def profil_taux_reussite(taux_reussite, thresholds=None):
+def profil_taux_reussite(taux_reussite):
     if pd.isna(taux_reussite):
         return "inconnu"
-
-    if thresholds is None:
-        if taux_reussite >= 0.8:
-            return "forte_reussite"
-        if taux_reussite >= 0.5:
-            return "reussite_moyenne"
-        return "faible_reussite"
-
-    t1, t2 = thresholds
-    if taux_reussite <= t1:
-        return "faible_reussite"
-    if taux_reussite <= t2:
+    
+    if taux_reussite >= 0.75:
+        return "forte_reussite"
+    if taux_reussite >= 0.5:
         return "reussite_moyenne"
-    return "forte_reussite"
+    return "faible_reussite"
+
 
 def classe_finale_from_profils(profil_prog, profil_modif, profil_temps, profil_tent, profil_reussite=None):
     if profil_reussite == "non_reussi":
@@ -1072,10 +1065,6 @@ def build_user_classification(dataset):
     user_stats = user_stats.merge(taux_reussite_user, on="id", how="left")
 
     thresholds = compute_dynamic_thresholds(user_stats)
-    success_thresholds = compute_tertile_thresholds(
-        user_stats["taux_reussite"],
-        fallback=(0.33, 0.66)
-    )
 
     user_stats["profil_progression"] = user_stats["mean_progress"].apply(
         lambda x: profil_progression_dynamic(x, thresholds)
@@ -1095,7 +1084,7 @@ def build_user_classification(dataset):
         axis=1
     )
     user_stats["profil_reussite"] = user_stats["taux_reussite"].apply(
-        lambda x: profil_taux_reussite(x, success_thresholds)
+        lambda x: profil_taux_reussite(x)
     )
 
     user_stats["classe"] = user_stats.apply(
@@ -1108,7 +1097,7 @@ def build_user_classification(dataset):
         axis=1
     )
 
-    return user_stats, thresholds, success_thresholds
+    return user_stats, thresholds
 
 def build_user_exercice_classification(dataset):
     df = dataset.copy()
