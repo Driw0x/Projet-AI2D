@@ -175,41 +175,28 @@ def build_solution_dict(solution_data):
 
 def build_user_exercise_count_dict(df):
     """
-    Calcule le nombre de tentatives pour chaque couple (user, exercice).
+    Calcule le nombre de tentatives non vides pour chaque couple (user, exercice).
 
     Retour :
     - dict {(id_compte, exercice): nb_tentatives}
     """
-    df = df[df["code"] != ""]
+    required = {"id_compte", "level_1", "code"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Colonnes absentes : {sorted(missing)}")
 
-    counts = {}
+    data = df[df["code"].notna() & (df["code"] != "")].copy()
 
-    for user_id in np.unique(df["id_compte"]):
-        user_df = df[df["id_compte"] == user_id]
+    return data.groupby(["id_compte", "level_1"], dropna=False).size().to_dict()
 
-        for ex in np.unique(user_df["level_1"]):
-            key = (
-                int(user_id) if isinstance(user_id, np.generic) else user_id,
-                str(ex)
-            )
-            counts[key] = len(user_df[user_df["level_1"] == ex])
 
-    return counts
-
-def couples_valides(df):
-    all_ex = np.unique(df["level_1"])
-    all_users = np.unique(df["id_compte"])
-    couples = set()
-    user_ex_counts = build_user_exercise_count_dict(df)
-
-    for user_id in all_users:
-        for ex in all_ex:
-            key = (user_id, ex)
-            nb_tentatives = user_ex_counts.get(key, 0)
-            if nb_tentatives > 5:
-                couples.add(key)
-
-    return couples
+def couples_valides(df, min_tentatives=5):
+    """
+    Retourne les couples (id_compte, exercice) ayant plus de min_tentatives tentatives.
+    Par défaut : > 5 comme dans l'ancien code.
+    """
+    counts = build_user_exercise_count_dict(df)
+    return {key for key, nb in counts.items() if nb > min_tentatives}
 
 # Wrapping
 
@@ -327,133 +314,306 @@ def save_dataset_to_json(df, path):
 
     print(f"Dataset sauvegardé dans {path}")
 
-# Cas 1: transformation t->t+1
+# Cas 1 / Pre-calcul : construction commune des transitions t -> t+1
 import warnings
-def cas1_x_y(data, x, y, zss_cache=None):
-    """
-    Compare le code x et y.
-    """
-    if x < 0 or y < 0 or x >= len(data) or y >= len(data):
-        return np.nan, {}, (0, []), [0, {}]
 
+def check_required_columns(df, columns):
+    """
+    Vérifie que les colonnes nécessaires sont présentes dans un DataFrame.
+    """
+    missing = [col for col in columns if col not in df.columns]
+    if missing:
+        raise ValueError(f"Colonnes absentes : {missing}. Colonnes disponibles : {df.columns.tolist()}")
+
+
+def prepare_attempts_dataframe(dfo, min_tentatives=5):
+    """
+    Filtre les tentatives exploitables :
+    - code présent et non vide ;
+    - couple (user, exercice) avec assez de tentatives.
+    """
+    check_required_columns(dfo, ["id_compte", "level_1", "code"])
+
+    df = dfo[dfo["code"].notna() & (dfo["code"] != "")].copy()
+    valid_couples = couples_valides(df, min_tentatives=min_tentatives)
+
+    return df[df[["id_compte", "level_1"]].apply(tuple, axis=1).isin(valid_couples)].copy()
+
+
+def build_ast_solutions(sol_info):
+    """
+    Convertit les codes solutions d'un exercice en AST.
+    """
+    if sol_info is None:
+        return []
+
+    ast_solutions = []
+    for sol in sol_info.get("correctCodes", []):
+        ast_sol = code_to_ast(sol)
+        if ast_sol is not None:
+            ast_solutions.append(ast_sol)
+
+    return ast_solutions
+
+
+def safe_temps(value):
+    """
+    Normalise un temps invalide ou nul en NaN.
+    """
+    if pd.isna(value) or value == 0:
+        return np.nan
+    return value
+
+
+def compare_transition(
+    code_t,
+    code_t_1,
+    zss_cache=None,
+    ast_solutions=None,
+    include_code_errors=False,
+    include_solution_scores=False,
+    context=""
+):
+    """
+    Compare deux codes consécutifs t -> t+1.
+    """
     if zss_cache is None:
         zss_cache = {}
+    if ast_solutions is None:
+        ast_solutions = []
 
-    code_x = data.loc[x, "code"]
-    code_y = data.loc[y, "code"]
+    result = {
+        "distance_zss": np.nan,
+        "ops": {},
+        "primary_code_errors_score": np.nan,
+        "primary_code_errors": [],
+        "typology_based_code_error_score": np.nan,
+        "typology_based_code_error": {},
+        "score_t_solution": np.nan,
+        "score_t_plus_1_solution": np.nan,
+        "progression_solution": np.nan,
+    }
 
-    # comparaison x -> y
+    # Distance AST/ZSS entre t et t+1
     try:
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always", SyntaxWarning)
-            primary = primary_code_error_two_prog(code_x, code_y)
-            typology = prog_vs_answer(code_x, [code_y])
+        tree_t = get_zss_tree(code_t, zss_cache)
+        tree_t_1 = get_zss_tree(code_t_1, zss_cache)
 
-            for warn in w:
-                tqdm.write(f"Warning t={x+1}, t'={y+1}: {warn.message}")
-                tqdm.write("code_x:")
-                tqdm.write(code_x)
-                tqdm.write("code_y:")
-                tqdm.write(code_y)
+        if tree_t is not None and tree_t_1 is not None:
+            result["distance_zss"], result["ops"] = distance(tree_t, tree_t_1, get_children)
     except Exception as err:
-        tqdm.write(f"Erreur comparaison t={x+1}, t'={y+1}: {err}")
-        primary = (0, [])
-        typology = [0, {}]
+        tqdm.write(f"Erreur distance {context}: {err}")
 
-    # distance ZSS
-    tree_x = get_zss_tree(code_x, zss_cache)
-    tree_y = get_zss_tree(code_y, zss_cache)
-
-    if tree_x is None or tree_y is None:
-        d, ops = np.nan, {}
-    else:
+    # Erreurs entre t et t+1, utile pour cas1/cas2
+    if include_code_errors:
         try:
-            d, ops = distance(tree_x, tree_y, get_children)
+            with warnings.catch_warnings(record=True) as warns:
+                warnings.simplefilter("always", SyntaxWarning)
+                primary = primary_code_error_two_prog(code_t, code_t_1)
+                typology = prog_vs_answer(code_t, [code_t_1])
+
+                for warn in warns:
+                    tqdm.write(f"Warning {context}: {warn.message}")
+
+            result["primary_code_errors_score"] = primary[0]
+            result["primary_code_errors"] = primary[1]
+            result["typology_based_code_error_score"] = typology[0]
+            result["typology_based_code_error"] = typology[1]
         except Exception as err:
-            tqdm.write(f"Erreur distance t={x+1}, t'={y+1}: {err}")
-            d, ops = np.nan, {}
+            tqdm.write(f"Erreur comparaison t->t+1 {context}: {err}")
+            result["primary_code_errors_score"] = 0
+            result["primary_code_errors"] = []
+            result["typology_based_code_error_score"] = 0
+            result["typology_based_code_error"] = {}
 
-    return d, ops, primary, typology
+    # Scores par rapport aux solutions, utile pour pre_calcul/classification
+    if include_solution_scores:
+        ast_t = code_to_ast(code_t)
+        ast_t_1 = code_to_ast(code_t_1)
 
-def cas1(dfo, solution_df):
+        try:
+            comp_t_sol = prog_vs_answer(ast_t, ast_solutions) if ast_t is not None and ast_solutions else [0, {}]
+        except Exception as err:
+            tqdm.write(f"Erreur comparaison t->solution {context}: {err}")
+            comp_t_sol = [0, {}]
+
+        try:
+            comp_t1_sol = prog_vs_answer(ast_t_1, ast_solutions) if ast_t_1 is not None and ast_solutions else [0, {}]
+        except Exception as err:
+            tqdm.write(f"Erreur comparaison t+1->solution {context}: {err}")
+            comp_t1_sol = [0, {}]
+
+        result["score_t_solution"] = extract_score(comp_t_sol)
+        result["score_t_plus_1_solution"] = extract_score(comp_t1_sol)
+        result["progression_solution"] = result["score_t_plus_1_solution"] - result["score_t_solution"]
+
+    return result
+
+
+def build_transition_dataset(
+    dfo,
+    solution_df,
+    include_code_errors=False,
+    include_solution_scores=True,
+    include_temps=True,
+    include_status=True,
+    include_codes=False,
+    min_tentatives=5,
+    save_path=None,
+):
     """
-    Construit le dataset des comparaisons t -> t+1.
-
-    Retour:
-        dataset_t_t1(
-            id,
-            exercice,
-            type_exercice,
-            t,
-            dist_zss,
-            ops,
-            code_t,
-            code_t_1,
-            comparaison_t_t1
-        )
+    Construit le dataset commun des transitions t -> t+1.
     """
-    df = dfo[dfo["code"].notna() & (dfo["code"] != "")].copy()
+    required = ["id_compte", "level_1", "code"]
+    if include_temps:
+        required.append("temps_passe")
+    if include_status:
+        required.append("statut")
+    check_required_columns(dfo, required)
 
-    couples = couples_valides(dfo)
-    df = df[df[["id_compte", "level_1"]].apply(tuple, axis=1).isin(couples)].copy()
-
+    df = prepare_attempts_dataframe(dfo, min_tentatives=min_tentatives)
     solution_dict = build_solution_dict(solution_df)
-
     lignes = []
 
     user_groups = list(df.groupby("id_compte", sort=False))
 
     for user_id, user_df in tqdm(user_groups, desc="Processing", position=0, leave=True, dynamic_ncols=True):
-
         ex_groups = list(user_df.groupby("level_1", sort=False))
 
-        for ex, group in tqdm(ex_groups,
-                              desc=f"User {user_id}",
-                              position=1,
-                              leave=False):
-
+        for ex, group in tqdm(ex_groups, desc=f"User {user_id}", position=1, leave=False):
             group = group.reset_index(drop=True)
-
             if len(group) < 2:
                 continue
 
             sol_info = solution_dict.get(ex)
             exercise_type = sol_info.get("exerciseType", np.nan) if sol_info is not None else np.nan
-
+            ast_solutions = build_ast_solutions(sol_info) if include_solution_scores else []
             zss_cache = {}
+            reussite_finale_exercice = group.loc[len(group) - 1, "statut"] if include_status else np.nan
 
-            for i in tqdm(range(len(group) - 1),
-                          desc=f"Exercice {ex}",
-                          position=2,
-                          leave=False):
-                
+            for i in tqdm(range(len(group) - 1), desc=f"Exercice {ex}", position=2, leave=False):
                 code_t = group.loc[i, "code"]
                 code_t_1 = group.loc[i + 1, "code"]
-                
-                d, ops, primary, typology = cas1_x_y(group,
-                                                     i,
-                                                     i + 1,
-                                                     zss_cache)
-                
-                row = {"id": user_id,
-                       "exercice": ex,
-                       "type_exercice": exercise_type,
-                       "t": i + 1,
-                       "dist_zss": d,
-                       "ops": ops,
-                       "code_t": code_t,
-                       "code_t_1": code_t_1,
-                       "primary_code_errors_score": primary[0],
-                       "primary_code_errors": primary[1],
-                       "typology_based_code_error_score": typology[0],
-                       "typology_based_code_error": typology[1]}
+                context = f"user={user_id}, ex={ex}, t={i + 1}"
+
+                comparison = compare_transition(
+                    code_t,
+                    code_t_1,
+                    zss_cache=zss_cache,
+                    ast_solutions=ast_solutions,
+                    include_code_errors=include_code_errors,
+                    include_solution_scores=include_solution_scores,
+                    context=context,
+                )
+
+                row = {
+                    "id": user_id,
+                    "exercice": ex,
+                    "type_exercice": exercise_type,
+                    "t": i + 1,
+                    "t_plus_1": i + 2,
+                    "distance_zss": comparison["distance_zss"],
+                    "ops": comparison["ops"],
+                }
+
+                if include_codes:
+                    row["code_t"] = code_t
+                    row["code_t_1"] = code_t_1
+
+                if include_code_errors:
+                    row.update({
+                        "primary_code_errors_score": comparison["primary_code_errors_score"],
+                        "primary_code_errors": comparison["primary_code_errors"],
+                        "typology_based_code_error_score": comparison["typology_based_code_error_score"],
+                        "typology_based_code_error": comparison["typology_based_code_error"],
+                    })
+
+                if include_solution_scores:
+                    row.update({
+                        "score_t_solution": comparison["score_t_solution"],
+                        "score_t_plus_1_solution": comparison["score_t_plus_1_solution"],
+                        "progression_solution": comparison["progression_solution"],
+                    })
+
+                if include_temps:
+                    temps_t = safe_temps(group.loc[i, "temps_passe"])
+                    temps_t_1 = safe_temps(group.loc[i + 1, "temps_passe"])
+                    row["temps_t"] = temps_t
+                    row["temps_t_plus_1"] = temps_t_1
+                    row["delta_temps"] = temps_t_1 - temps_t if pd.notna(temps_t) and pd.notna(temps_t_1) else np.nan
+
+                if include_status:
+                    row.update({
+                        "statut_t": group.loc[i, "statut"],
+                        "statut_t_plus_1": group.loc[i + 1, "statut"],
+                        "reussite_finale_exercice": reussite_finale_exercice,
+                    })
 
                 lignes.append(row)
 
     dataset = pd.DataFrame(lignes)
 
-    save_dataset_to_json(dataset, "cas1.json")
+    if save_path is not None:
+        save_dataset_to_json(dataset, save_path)
 
+    return dataset
+
+
+def cas1_x_y(data, x, y, zss_cache=None):
+    if x < 0 or y < 0 or x >= len(data) or y >= len(data):
+        return np.nan, {}, (0, []), [0, {}]
+
+    result = compare_transition(
+        data.loc[x, "code"],
+        data.loc[y, "code"],
+        zss_cache=zss_cache,
+        include_code_errors=True,
+        include_solution_scores=False,
+        context=f"t={x + 1}, t'={y + 1}",
+    )
+
+    primary = (result["primary_code_errors_score"], result["primary_code_errors"])
+    typology = [result["typology_based_code_error_score"], result["typology_based_code_error"]]
+    return result["distance_zss"], result["ops"], primary, typology
+
+
+def cas1(dfo, solution_df):
+    """
+    Construit le dataset des comparaisons t -> t+1 avec les erreurs AED.
+    """
+    dataset = build_transition_dataset(
+        dfo,
+        solution_df,
+        include_code_errors=True,
+        include_solution_scores=False,
+        include_temps=False,
+        include_status=False,
+        include_codes=True,
+        save_path=None,
+    )
+
+    # Compatibilité avec l'ancien nom de colonne.
+    dataset["dist_zss"] = dataset["distance_zss"]
+
+    ordered_cols = [
+        "id",
+        "exercice",
+        "type_exercice",
+        "t",
+        "t_plus_1",
+        "dist_zss",
+        "distance_zss",
+        "ops",
+        "code_t",
+        "code_t_1",
+        "primary_code_errors_score",
+        "primary_code_errors",
+        "typology_based_code_error_score",
+        "typology_based_code_error",
+    ]
+    dataset = dataset[[col for col in ordered_cols if col in dataset.columns]]
+
+    save_dataset_to_json(dataset, "cas1.json")
     return dataset
 
 # Cas 2
@@ -670,6 +830,7 @@ def extract_score(comp):
     except Exception:
         return np.nan
 
+
 def remove_outliers_iqr(series: pd.Series) -> pd.Series:
     """
     Retire les valeurs extrêmes avec la règle IQR.
@@ -801,15 +962,17 @@ def profil_temps_dynamic(mean_temps, nb_temps_valides, thresholds):
         return "modere"
     return "lent"
 
+
 def profil_reussite_exercice(reussite_finale):
     if pd.isna(reussite_finale):
         return "inconnu"
     return "reussi" if reussite_finale == 1 else "non_reussi"
 
+
 def profil_taux_reussite(taux_reussite):
     if pd.isna(taux_reussite):
         return "inconnu"
-    
+
     if taux_reussite >= 0.75:
         return "forte_reussite"
     if taux_reussite >= 0.5:
@@ -818,307 +981,223 @@ def profil_taux_reussite(taux_reussite):
 
 
 def classe_finale_from_profils(profil_prog, profil_modif, profil_temps, profil_tent, profil_reussite=None):
-    if profil_reussite == "non_reussi":
+    """
+    Déduit une classe finale à partir des profils.
+
+    Version moins restrictive : avant, presque toutes les règles étaient dans
+    `if profil_temps == "non_renseigne"`, donc dès que le temps était présent,
+    la fonction retournait très souvent `profil_intermediaire`.
+
+    Ici, le temps sert comme information complémentaire, mais ne bloque plus
+    toute la classification.
+    """
+    bonne_reussite = profil_reussite in [None, "inconnu", "reussi", "forte_reussite", "reussite_moyenne"]
+    mauvaise_reussite = profil_reussite in ["non_reussi", "faible_reussite"]
+    temps_rapide_ou_absent = profil_temps in ["rapide", "non_renseigne"]
+    temps_lent = profil_temps == "lent"
+
+    # 1) Cas en difficulté : priorité aux échecs / faibles réussites.
+    if mauvaise_reussite:
         if profil_prog in ["stagnation", "regression"]:
             return "bloque"
         if profil_modif == "gros_restructurateur":
             return "explorateur_chaotique"
+        if profil_tent == "resolution_longue" or temps_lent:
+            return "en_difficulte"
+        return "fragile"
 
-    if profil_reussite == "faible_reussite":
-        if profil_prog in ["stagnation", "regression"]:
-            return "bloque"
+    # 2) Bons profils : progression efficace avec peu de changements.
+    if (
+        bonne_reussite
+        and profil_prog == "progression_rapide"
+        and profil_modif == "petit_ajusteur"
+        and profil_tent == "resolution_rapide"
+        and temps_rapide_ou_absent
+    ):
+        return "expert_progressif"
 
-    if profil_temps == "non_renseigne":
-        if (
-            profil_prog == "progression_rapide"
-            and profil_modif == "petit_ajusteur"
-            and profil_tent == "resolution_rapide"
-            and profil_reussite in [None, "reussi", "forte_reussite", "reussite_moyenne"]
-        ):
-            return "expert_progressif"
+    if (
+        bonne_reussite
+        and profil_prog in ["progression_rapide", "progression_lente"]
+        and profil_modif in ["petit_ajusteur", "modificateur_modere"]
+        and profil_tent in ["resolution_rapide", "resolution_moyenne"]
+    ):
+        return "reviseur_methodique"
 
-        if (
-            profil_prog in ["progression_rapide", "progression_lente"]
-            and profil_modif in ["petit_ajusteur", "modificateur_modere"]
-            and profil_tent in ["resolution_rapide", "resolution_moyenne"]
-        ):
-            return "reviseur_methodique"
+    # 3) Progression avec grosses modifications : il restructure beaucoup, mais avance.
+    if profil_prog in ["progression_rapide", "progression_lente"] and profil_modif == "gros_restructurateur":
+        if profil_tent == "resolution_longue" or temps_lent:
+            return "restructurateur_lent"
+        return "gros_restructurateur_productif"
 
-        if (
-            profil_prog in ["progression_rapide", "progression_lente"]
-            and profil_modif == "gros_restructurateur"
-        ):
-            return "gros_restructurateur"
-
-        if (
-            profil_prog in ["stagnation", "regression"]
-            and profil_tent == "resolution_longue"
-        ):
-            return "bloque"
-
-        if (
-            profil_prog in ["stagnation", "regression"]
-            and profil_modif == "gros_restructurateur"
-        ):
+    # 4) Peu ou pas de progression.
+    if profil_prog in ["stagnation", "regression"]:
+        if profil_modif == "gros_restructurateur":
             return "explorateur_chaotique"
+        if profil_tent == "resolution_longue" or temps_lent:
+            return "bloque"
+        return "stagne_mais_corrige"
 
-        return "profil_intermediaire"
+    # 5) Cas intermédiaires plus informatifs que `profil_intermediaire`.
+    if profil_prog == "progression_lente" and profil_tent == "resolution_longue":
+        return "perseverant_lent"
+
+    if profil_modif == "petit_ajusteur" and profil_tent == "resolution_longue":
+        return "petits_pas_nombreux"
+
+    if profil_modif == "modificateur_modere":
+        return "apprenant_regulier"
 
     return "profil_intermediaire"
 
+
+def distribution_classes(stats, col="classe"):
+    """
+    Retourne la distribution des classes en nombre et en pourcentage.
+    Utile pour vérifier si la classification est trop uniforme.
+    """
+    counts = stats[col].value_counts(dropna=False)
+    pct = stats[col].value_counts(normalize=True, dropna=False).mul(100).round(2)
+
+    return (
+        pd.DataFrame({"nb": counts, "%": pct})
+        .reset_index()
+        .rename(columns={"index": col})
+    )
+
+
+def diagnostic_classification(stats):
+    """
+    Diagnostic rapide pour comprendre pourquoi les classes sont concentrées.
+    """
+    colonnes = [
+        "profil_progression",
+        "profil_modification",
+        "profil_tentatives",
+        "profil_temps",
+        "profil_reussite",
+        "classe",
+    ]
+
+    return {
+        col: distribution_classes(stats, col)
+        for col in colonnes
+        if col in stats.columns
+    }
+
+
 def pre_calcul(dfo, solution_df):
     """
-    Construit un dataset allégé pour la classification des users.
-
-    Colonnes conservées :
-    - id
-    - exercice
-    - type_exercice
-    - t
-    - t_plus_1
-    - distance_zss
-    - score_t_solution
-    - score_t_plus_1_solution
-    - progression_solution
-    - temps_t
-    - temps_t_plus_1
-    - delta_temps
-    - statut_t
-    - statut_t_plus_1
-    - reussite_finale_exercice
+    Construit un dataset allégé pour la classification.
     """
-    if "code" not in dfo.columns:
-        raise ValueError(f"Colonne 'code' absente. Colonnes disponibles : {dfo.columns.tolist()}")
+    dataset = build_transition_dataset(
+        dfo,
+        solution_df,
+        include_code_errors=False,
+        include_solution_scores=True,
+        include_temps=True,
+        include_status=True,
+        include_codes=False,
+        save_path="pre_calcul.json",
+    )
 
-    if "temps_passe" not in dfo.columns:
-        raise ValueError(f"Colonne 'temps_passe' absente. Colonnes disponibles : {dfo.columns.tolist()}")
+    cols = [
+        "id",
+        "exercice",
+        "type_exercice",
+        "t",
+        "t_plus_1",
+        "distance_zss",
+        "score_t_solution",
+        "score_t_plus_1_solution",
+        "progression_solution",
+        "temps_t",
+        "temps_t_plus_1",
+        "delta_temps",
+        "statut_t",
+        "statut_t_plus_1",
+        "reussite_finale_exercice",
+    ]
+    return dataset[[col for col in cols if col in dataset.columns]]
 
-    if "statut" not in dfo.columns:
-        raise ValueError(f"Colonne 'statut' absente. Colonnes disponibles : {dfo.columns.tolist()}")
 
-    df = dfo[dfo["code"].notna() & (dfo["code"] != "")].copy()
+def aggregate_classification_stats(dataset, group_cols, success_mode):
+    """
+    Agrège les métriques nécessaires à la classification.
 
-    couples = couples_valides(dfo)
-    df = df[df[["id_compte", "level_1"]].apply(tuple, axis=1).isin(couples)].copy()
-    solution_dict = build_solution_dict(solution_df)
-
-    lignes = []
-
-    user_groups = list(df.groupby("id_compte", sort=False))
-
-    for user_id, user_df in tqdm(
-        user_groups,
-        desc="Processing",
-        position=0,
-        leave=True,
-        dynamic_ncols=True
-    ):
-        ex_groups = list(user_df.groupby("level_1", sort=False))
-
-        for ex, group in tqdm(
-            ex_groups,
-            desc=f"User {user_id}",
-            position=1,
-            leave=False
-        ):
-            group = group.reset_index(drop=True)
-
-            if len(group) < 2:
-                continue
-
-            sol_info = solution_dict.get(ex)
-
-            if sol_info is not None:
-                correct_codes = sol_info.get("correctCodes", [])
-                exercise_type = sol_info.get("exerciseType", np.nan)
-
-                ast_solutions = []
-                for sol in correct_codes:
-                    ast_sol = code_to_ast(sol)
-                    if ast_sol is not None:
-                        ast_solutions.append(ast_sol)
-            else:
-                exercise_type = np.nan
-                ast_solutions = []
-
-            zss_cache = {}
-
-            # statut final de l'exercice = dernière tentative
-            reussite_finale_exercice = group.loc[len(group) - 1, "statut"]
-
-            for i in tqdm(
-                range(len(group) - 1),
-                desc=f"Exercice {ex}",
-                position=2,
-                leave=False
-            ):
-                code_t = group.loc[i, "code"]
-                code_t_1 = group.loc[i + 1, "code"]
-
-                statut_t = group.loc[i, "statut"]
-                statut_t_1 = group.loc[i + 1, "statut"]
-
-                temps_t = group.loc[i, "temps_passe"]
-                temps_t_1 = group.loc[i + 1, "temps_passe"]
-                temps_t = np.nan if pd.isna(temps_t) or temps_t == 0 else temps_t
-                temps_t_1 = np.nan if pd.isna(temps_t_1) or temps_t_1 == 0 else temps_t_1
-
-                if pd.notna(temps_t) and pd.notna(temps_t_1):
-                    delta_temps = temps_t_1 - temps_t
-                else:
-                    delta_temps = np.nan
-
-                try:
-                    tree_t = get_zss_tree(code_t, zss_cache)
-                    tree_t_1 = get_zss_tree(code_t_1, zss_cache)
-
-                    if tree_t is not None and tree_t_1 is not None:
-                        distance_zss, _ = distance(tree_t, tree_t_1, get_children)
-                    else:
-                        distance_zss = np.nan
-                except Exception as err:
-                    tqdm.write(f"Erreur distance user={user_id}, ex={ex}, t={i+1}: {err}")
-                    distance_zss = np.nan
-
-                ast_t = code_to_ast(code_t)
-                ast_t_1 = code_to_ast(code_t_1)
-
-                try:
-                    if ast_t is not None and ast_solutions:
-                        comp_t_sol = prog_vs_answer(ast_t, ast_solutions)
-                    else:
-                        comp_t_sol = [0, {}]
-                except Exception as err:
-                    tqdm.write(f"Erreur comparaison t->solution user={user_id}, ex={ex}, t={i+1}: {err}")
-                    comp_t_sol = [0, {}]
-
-                try:
-                    if ast_t_1 is not None and ast_solutions:
-                        comp_t1_sol = prog_vs_answer(ast_t_1, ast_solutions)
-                    else:
-                        comp_t1_sol = [0, {}]
-                except Exception as err:
-                    tqdm.write(f"Erreur comparaison t+1->solution user={user_id}, ex={ex}, t={i+2}: {err}")
-                    comp_t1_sol = [0, {}]
-
-                score_t_sol = extract_score(comp_t_sol)
-                score_t1_sol = extract_score(comp_t1_sol)
-                progression_sol = score_t1_sol - score_t_sol
-
-                lignes.append({
-                    "id": user_id,
-                    "exercice": ex,
-                    "type_exercice": exercise_type,
-                    "t": i + 1,
-                    "t_plus_1": i + 2,
-                    "distance_zss": distance_zss,
-                    "score_t_solution": score_t_sol,
-                    "score_t_plus_1_solution": score_t1_sol,
-                    "progression_solution": progression_sol,
-                    "temps_t": temps_t,
-                    "temps_t_plus_1": temps_t_1,
-                    "delta_temps": delta_temps,
-                    "statut_t": statut_t,
-                    "statut_t_plus_1": statut_t_1,
-                    "reussite_finale_exercice": reussite_finale_exercice
-                })
-
-    dataset = pd.DataFrame(lignes)
-
-    save_dataset_to_json(dataset, "pre_calcul.json")
-
-    return dataset
-
-def build_user_classification(dataset):
+    success_mode:
+    - "user" : calcule un taux de réussite par utilisateur.
+    - "exercise" : garde la réussite finale du couple user/exercice.
+    """
     df = dataset.copy()
-
-    # une ligne par couple (user, exercice) pour la réussite finale
-    reussite_ex = (
-        df.groupby(["id", "exercice"], dropna=False)
-        .agg(reussite_finale_exercice=("reussite_finale_exercice", "max"))
-        .reset_index()
+    check_required_columns(
+        df,
+        [
+            "id",
+            "exercice",
+            "progression_solution",
+            "distance_zss",
+            "t_plus_1",
+            "delta_temps",
+            "reussite_finale_exercice",
+        ]
     )
 
-    taux_reussite_user = (
-        reussite_ex.groupby("id", dropna=False)
-        .agg(
-            taux_reussite=("reussite_finale_exercice", "mean"),
-            nb_exercices=("exercice", "size"),
-            nb_exercices_reussis=("reussite_finale_exercice", "sum")
+    agg_dict = {
+        "mean_progress": ("progression_solution", "mean"),
+        "mean_zss": ("distance_zss", "mean"),
+        "max_tentative": ("t_plus_1", "max"),
+        "nb_transitions": ("id", "size"),
+        "mean_delta_temps": ("delta_temps", "mean"),
+        "nb_temps_valides": ("delta_temps", lambda s: s.notna().sum()),
+    }
+
+    if "type_exercice" in df.columns and "exercice" in group_cols:
+        agg_dict["type_exercice"] = ("type_exercice", "first")
+
+    stats = df.groupby(group_cols, dropna=False).agg(**agg_dict).reset_index()
+
+    if success_mode == "user":
+        reussite_ex = (
+            df.groupby(["id", "exercice"], dropna=False)
+            .agg(reussite_finale_exercice=("reussite_finale_exercice", "max"))
+            .reset_index()
         )
-        .reset_index()
-    )
 
-    user_stats = (
-        df.groupby("id", dropna=False)
-        .agg(
-            mean_progress=("progression_solution", "mean"),
-            mean_zss=("distance_zss", "mean"),
-            max_tentative=("t_plus_1", "max"),
-            nb_transitions=("id", "size"),
-            mean_delta_temps=("delta_temps", "mean"),
-            nb_temps_valides=("delta_temps", lambda s: s.notna().sum())
+        success = (
+            reussite_ex.groupby("id", dropna=False)
+            .agg(
+                taux_reussite=("reussite_finale_exercice", "mean"),
+                nb_exercices=("exercice", "size"),
+                nb_exercices_reussis=("reussite_finale_exercice", "sum"),
+            )
+            .reset_index()
         )
-        .reset_index()
-    )
+        stats = stats.merge(success, on="id", how="left")
+        stats["profil_reussite"] = stats["taux_reussite"].apply(profil_taux_reussite)
 
-    user_stats = user_stats.merge(taux_reussite_user, on="id", how="left")
-
-    thresholds = compute_dynamic_thresholds(user_stats)
-
-    user_stats["profil_progression"] = user_stats["mean_progress"].apply(
-        lambda x: profil_progression_dynamic(x, thresholds)
-    )
-    user_stats["profil_modification"] = user_stats["mean_zss"].apply(
-        lambda x: profil_modification_dynamic(x, thresholds)
-    )
-    user_stats["profil_tentatives"] = user_stats["max_tentative"].apply(
-        lambda x: profil_tentatives_dynamic(x, thresholds)
-    )
-    user_stats["profil_temps"] = user_stats.apply(
-        lambda row: profil_temps_dynamic(
-            row["mean_delta_temps"],
-            row["nb_temps_valides"],
-            thresholds
-        ),
-        axis=1
-    )
-    user_stats["profil_reussite"] = user_stats["taux_reussite"].apply(
-        lambda x: profil_taux_reussite(x)
-    )
-
-    user_stats["classe"] = user_stats.apply(
-        lambda row: classe_finale_from_profils(
-            row["profil_progression"],
-            row["profil_modification"],
-            row["profil_temps"],
-            row["profil_tentatives"]
-        ),
-        axis=1
-    )
-
-    return user_stats, thresholds
-
-def build_user_exercice_classification(dataset):
-    df = dataset.copy()
-
-    stats = (
-        df.groupby(["id", "exercice"], dropna=False)
-        .agg(
-            type_exercice=("type_exercice", "first"),
-            mean_progress=("progression_solution", "mean"),
-            mean_zss=("distance_zss", "mean"),
-            max_tentative=("t_plus_1", "max"),
-            nb_transitions=("id", "size"),
-            mean_delta_temps=("delta_temps", "mean"),
-            nb_temps_valides=("delta_temps", lambda s: s.notna().sum()),
-            reussite_finale_exercice=("reussite_finale_exercice", "max")
+    elif success_mode == "exercise":
+        success = (
+            df.groupby(group_cols, dropna=False)
+            .agg(reussite_finale_exercice=("reussite_finale_exercice", "max"))
+            .reset_index()
         )
-        .reset_index()
-    )
+        stats = stats.merge(success, on=group_cols, how="left")
+        stats["profil_reussite"] = stats["reussite_finale_exercice"].apply(profil_reussite_exercice)
 
+    else:
+        raise ValueError("success_mode doit être 'user' ou 'exercise'")
+
+    return stats
+
+
+def apply_dynamic_profiles(stats):
+    """
+    Ajoute les profils dynamiques et la classe finale.
+    """
     thresholds = compute_dynamic_thresholds(stats)
 
+    stats = stats.copy()
     stats["profil_progression"] = stats["mean_progress"].apply(
         lambda x: profil_progression_dynamic(x, thresholds)
     )
@@ -1132,20 +1211,44 @@ def build_user_exercice_classification(dataset):
         lambda row: profil_temps_dynamic(
             row["mean_delta_temps"],
             row["nb_temps_valides"],
-            thresholds
+            thresholds,
         ),
-        axis=1
+        axis=1,
     )
-    stats["profil_reussite"] = stats["reussite_finale_exercice"].apply(profil_reussite_exercice)
 
     stats["classe"] = stats.apply(
         lambda row: classe_finale_from_profils(
             row["profil_progression"],
             row["profil_modification"],
             row["profil_temps"],
-            row["profil_tentatives"]
+            row["profil_tentatives"],
+            row["profil_reussite"],
         ),
-        axis=1
+        axis=1,
     )
 
     return stats, thresholds
+
+
+def build_user_classification(dataset):
+    """
+    Classification globale par utilisateur.
+    """
+    stats = aggregate_classification_stats(
+        dataset,
+        group_cols=["id"],
+        success_mode="user",
+    )
+    return apply_dynamic_profiles(stats)
+
+
+def build_user_exercice_classification(dataset):
+    """
+    Classification par couple (utilisateur, exercice).
+    """
+    stats = aggregate_classification_stats(
+        dataset,
+        group_cols=["id", "exercice"],
+        success_mode="exercise",
+    )
+    return apply_dynamic_profiles(stats)

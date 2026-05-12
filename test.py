@@ -1,75 +1,269 @@
-import utils
+import utils_refactor as utils
 import numpy as np
 from pandasgui import show
 
-# Lecture des donnees
 
-# lit le fichier brut
-data = utils.read_data("data/2025.json")
-sol = utils.read_data("data/exercises.json")
+# =========================
+# Configuration
+# =========================
 
-# transforme les donnees AlgoPython en DataFrame exploitable
-df = utils.AlgoPython_data(data)
+DATA_PATH = "data/2025.json"
+EXERCISES_PATH = "data/exercises.json"
 
-# Tests
+CAS1_PATH = "data/cas1.json"
+CAS2_PATH = "data/cas2.json"
+PRE_CALCUL_PATH = "data/pre_calcul.json"
 
-# analyse detaillee d'un user
-# utils.analyse_user(46272, df)
 
-# comparaison manuelle entre deux programmes si besoin
-# p1 = utils.code_to_ast(df.iloc[0]["code"])
-# p2 = utils.code_to_ast(df.iloc[1]["code"])
-# print(utils.ast_dump(p1))
-# print(utils.primary_code_error_two_prog(p1, p2))
+# =========================
+# Chargement des données
+# =========================
 
-# affichage du DataFrame si besoin
-# show(df[df["code"] != ""])
+def load_data():
+    """
+    Charge et prépare les données AlgoPython.
+    """
+    data = utils.read_data(DATA_PATH)
+    solutions = utils.read_data(EXERCISES_PATH)
 
-# Echantillonnage
-# c = utils.cas1(df, sol)
-# c = utils.read_data("data/cas1_2022.json")
-# show(c)
+    df = utils.AlgoPython_data(data)
 
-# c2 = utils.cas2(c)
-# c2 = utils.read_data("data/cas2_2022.json")
-# show(c2)
+    return df, solutions
 
-# id = np.random.choice(c2["id"], 1)[0]
-# ex = np.random.choice(c2[c2["id"] == id]["exercice"], 1)[0]
-# id = 22933
-# ex = "B7"
-# cas = c2[(c2["id"] == id) & (c2["exercice"] == ex)].reset_index(drop=True)
 
-# print(f"Information sur les tentatives de l'user {id} sur l'exercice {ex}")
-# for i in range(len(cas)):
-#     primary_list = cas.loc[i, "primary_code_errors_text"]
-#     typology_list = cas.loc[i, "typology_based_code_error_text"]
-#     print(f"Tentative {i+1} vs {i+2}")
-#     print(f"Code {i+1}:")
-#     print(cas.loc[i, "code_t"])
-#     print()
-#     print(f"Code {i+2}:")
-#     print(cas.loc[i, "code_t_1"])
-#     print()
-#     if len(typology_list) > 0:
-#         print("Modification simple")
-#         for k in range(len(typology_list)):
-#             print(typology_list[k])
-#         print()
-#     if len(primary_list) > 0:
-#         print("Modification détaillé")
-#         for j in range(len(primary_list)):
-#             print(primary_list[j])
-#     if len(primary_list) == 0 and  len(typology_list) == 0:
-#         print("Pas de modification")
-#     print("______________________________")
+# =========================
+# Outils debug / AST
+# =========================
 
-# c = utils.pre_calcul(df, sol)
-c = utils.read_data("data/pre_calcul.json")
+def debug_ast(df, idx=0):
+    """
+    Affiche l'AST d'un programme.
+    """
+    code = df.iloc[idx]["code"]
 
-user_stats, seuils_user = utils.build_user_classification(c)
-user_ex_stats, seuils_user_ex = utils.build_user_exercice_classification(c)
-show(user_stats)
-show(user_ex_stats)
-print(seuils_user)
-print(seuils_user_ex)
+    ast_tree = utils.code_to_ast(code)
+
+    print(utils.ast_dump(ast_tree))
+
+
+def compare_programs(df, idx1=0, idx2=1):
+    """
+    Compare deux programmes.
+    """
+    code1 = df.iloc[idx1]["code"]
+    code2 = df.iloc[idx2]["code"]
+
+    result = utils.primary_code_error_two_prog(code1, code2)
+
+    print(result)
+
+
+# =========================
+# Affichage dataset
+# =========================
+
+def show_codes(df):
+    """
+    Affiche uniquement les lignes avec du code.
+    """
+    show(df[df["code"] != ""])
+
+
+# =========================
+# Cas 1
+# =========================
+
+def build_cas1(df, solutions, reload=False):
+    """
+    Génère ou recharge cas1.
+    """
+    if reload:
+        return utils.read_data(CAS1_PATH)
+
+    return utils.cas1(df, solutions)
+
+
+# =========================
+# Cas 2
+# =========================
+
+def build_cas2(cas1_df, reload=False):
+    """
+    Génère ou recharge cas2.
+    """
+    if reload:
+        return utils.read_data(CAS2_PATH)
+
+    return utils.cas2(cas1_df)
+
+
+# =========================
+# Analyse d'un user/exercice
+# =========================
+
+def analyse_user_exercice(cas2_df, user_id=None, exercice=None):
+    """
+    Affiche les transitions d'un utilisateur.
+    """
+
+    if user_id is None:
+        user_id = np.random.choice(cas2_df["id"], 1)[0]
+
+    if exercice is None:
+        exercice = np.random.choice(
+            cas2_df[cas2_df["id"] == user_id]["exercice"],
+            1
+        )[0]
+
+    cas = cas2_df[
+        (cas2_df["id"] == user_id)
+        & (cas2_df["exercice"] == exercice)
+    ].reset_index(drop=True)
+
+    print(f"\n===== USER {user_id} / EXERCICE {exercice} =====\n")
+
+    for i in range(len(cas)):
+
+        print(f"\n--- Tentative {i+1} -> {i+2} ---\n")
+
+        print("Code t :\n")
+        print(cas.loc[i, "code_t"])
+
+        print("\nCode t+1 :\n")
+        print(cas.loc[i, "code_t_1"])
+
+        primary_text = cas.loc[i, "primary_code_errors_text"]
+        typology_text = cas.loc[i, "typology_based_code_error_text"]
+
+        if len(typology_text) > 0:
+            print("\nModification simple :")
+            for txt in typology_text:
+                print("-", txt)
+
+        if len(primary_text) > 0:
+            print("\nModification détaillée :")
+            for txt in primary_text:
+                print("-", txt)
+
+        if len(primary_text) == 0 and len(typology_text) == 0:
+            print("\nPas de modification")
+
+        print("\n==============================")
+
+
+# =========================
+# Pré-calcul
+# =========================
+
+def build_pre_calcul(df, solutions, reload=True):
+    """
+    Génère ou recharge le pré-calcul.
+    """
+    if reload:
+        return utils.read_data(PRE_CALCUL_PATH)
+
+    return utils.pre_calcul(df, solutions)
+
+
+# =========================
+# Classification
+# =========================
+
+def test_classification(pre_calcul_df):
+    """
+    Lance les classifications.
+    """
+
+    user_stats, seuils_user = utils.build_user_classification(pre_calcul_df)
+
+    user_ex_stats, seuils_user_ex = (
+        utils.build_user_exercice_classification(pre_calcul_df)
+    )
+
+    print("\n===== Seuils user =====")
+    print(seuils_user)
+
+    print("\n===== Seuils user/exercice =====")
+    print(seuils_user_ex)
+
+    print("\n===== Distribution user =====")
+    print(utils.distribution_classes(user_stats))
+
+    print("\n===== Distribution user/exercice =====")
+    print(utils.distribution_classes(user_ex_stats))
+
+    show(user_stats)
+    show(user_ex_stats)
+
+
+# =========================
+# Main
+# =========================
+
+def main():
+
+    df, solutions = load_data()
+
+    # =====================
+    # Debug AST
+    # =====================
+
+    # debug_ast(df, idx=0)
+
+    # =====================
+    # Comparaison programmes
+    # =====================
+
+    # compare_programs(df, idx1=0, idx2=1)
+
+    # =====================
+    # Affichage dataset
+    # =====================
+
+    # show_codes(df)
+
+    # =====================
+    # Cas1
+    # =====================
+
+    # cas1_df = build_cas1(df, solutions, reload=False)
+    # show(cas1_df)
+
+    # =====================
+    # Cas2
+    # =====================
+
+    # cas2_df = build_cas2(cas1_df, reload=False)
+    # show(cas2_df)
+
+    # =====================
+    # Analyse détaillée
+    # =====================
+
+    # analyse_user_exercice(
+    #     cas2_df,
+    #     user_id=22933,
+    #     exercice="B7"
+    # )
+
+    # analyse_user_exercice(cas2_df)
+
+    # =====================
+    # Pré-calcul
+    # =====================
+
+    pre_calcul_df = build_pre_calcul(
+        df,
+        solutions,
+        reload=True
+    )
+
+    # =====================
+    # Classification
+    # =====================
+
+    test_classification(pre_calcul_df)
+
+
+if __name__ == "__main__":
+    main()
