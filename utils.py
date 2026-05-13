@@ -58,75 +58,135 @@ def read_data(path):
 
 # Preparation des donnees AlgoPython
 
+def explode_json_column(df, column, max_level=None):
+    """
+    Éclate une colonne contenant une liste de dictionnaires JSON,
+    puis transforme les clés des dictionnaires en colonnes pandas.
+    """
+    df = df.explode(column, ignore_index=True)
+
+    details = pd.json_normalize(df[column], max_level=max_level)
+
+    df = df.drop(columns=[column])
+    df = df.join(details)
+
+    return df
+
+
+def trajectories_to_long(comptes):
+    """
+    Transforme la colonne 'trajectories' en format long.
+
+    Avant :
+        une ligne = un étudiant
+        trajectories = {
+            "A1": [tentative1, tentative2],
+            "B7": [tentative1, tentative2]
+        }
+
+    Après :
+        une ligne = un couple étudiant / exercice
+        colonnes :
+        - infos étudiant
+        - level_1 = exercice
+        - tentatives = liste des tentatives
+    """
+    lignes = []
+
+    for _, row in comptes.iterrows():
+        trajectories = row["trajectories"]
+
+        # Certains comptes peuvent ne pas avoir de trajectoires valides.
+        if not isinstance(trajectories, dict):
+            continue
+
+        # On garde toutes les colonnes de contexte :
+        # id_compte, classe, etc.
+        contexte = row.drop(labels=["trajectories"]).to_dict()
+
+        # Chaque clé du dictionnaire est un exercice.
+        # Chaque valeur est la liste des tentatives de cet exercice.
+        for exercice, tentatives in trajectories.items():
+            lignes.append({
+                **contexte,
+                "level_1": exercice,
+                "tentatives": tentatives
+            })
+
+    return pd.DataFrame(lignes)
+
+
 def AlgoPython_data(df):
     """
-    Transforme les donnees brutes AlgoPython en DataFrame plat.
+    Transforme les données brutes AlgoPython en DataFrame plat.
 
-    etapes :
-    - eclate la colonne classes
-    - eclate la colonne comptes
-    - recupère les trajectoires
-    - eclate les tentatives
-    - transforme le statut en binaire :
-        ok -> 1
-        autres -> 0
+    Le JSON d'origine est imbriqué sous cette forme :
+
+        classes
+            -> comptes / étudiants
+                -> trajectories
+                    -> exercices
+                        -> tentatives
+
+    La sortie contient une ligne par tentative d'un étudiant
+    sur un exercice.
     """
-    # copie du DataFrame
-    classes = df[df.columns]
 
-    # une ligne par classe
-    classes = classes.explode("classes", ignore_index=True)
+    # Copie pour éviter de modifier le DataFrame d'origine.
+    data = df.copy()
 
-    # normalise le contenu JSON de la colonne classes
-    classes_details = pd.json_normalize(classes["classes"])
-    classes = classes.drop(columns=["classes"])
-    classes = classes.join(classes_details)
+    # 1) Éclater les classes.
+    # Si une ligne contient plusieurs classes, on obtient une ligne par classe.
+    classes = explode_json_column(data, "classes")
 
-    # une ligne par compte
-    comptes = classes.explode("comptes", ignore_index=True)
+    # 2) Éclater les comptes.
+    # Chaque classe contient plusieurs comptes étudiants.
+    # On obtient une ligne par compte étudiant.
+    comptes = explode_json_column(classes, "comptes", max_level=0)
 
-    # normalise le contenu JSON de la colonne comptes
-    comptes_details = pd.json_normalize(comptes["comptes"], max_level=0)
-    comptes = comptes.drop(columns=["comptes"])
-    comptes = comptes.join(comptes_details)
+    # 3) Transformer les trajectoires en format long.
+    # Chaque exercice d'un étudiant devient une ligne.
+    traj_long = trajectories_to_long(comptes)
 
-    # recupère les trajectoires
-    trajectories = comptes["trajectories"]
+    # 4) Éclater les tentatives.
+    # Avant : une ligne contient une liste de tentatives.
+    # Après : une ligne correspond à une tentative.
+    df_final = traj_long.explode("tentatives", ignore_index=True)
 
-    # garde seulement les trajectoires qui sont des dictionnaires
-    trajectories = trajectories.where(trajectories.map(type).eq(dict), {})
+    # 5) Normaliser les tentatives.
+    # Chaque tentative est un dictionnaire :
+    # {
+    #   "code": "...",
+    #   "statut": "...",
+    #   "temps_passe": ...
+    # }
+    #
+    # json_normalize transforme ces clés en colonnes.
+    tentatives = pd.json_normalize(
+        df_final["tentatives"].apply(
+            lambda x: x if isinstance(x, dict) else {}
+        )
+    )
 
-    # passe les trajectoires en format large
-    traj_wide = trajectories.apply(pd.Series)
+    # 6) Remplacer la colonne brute "tentatives"
+    # par les colonnes normalisées : code, statut, temps_passe, etc.
+    df_final = df_final.drop(columns=["tentatives"]).join(tentatives)
 
-    # passe en format long
-    traj_long = traj_wide.stack(future_stack=True).reset_index(name="tentatives")
-
-    # recupère les colonnes de contexte
-    contexte = comptes.drop(columns=["trajectories"])
-    traj_long = traj_long.join(contexte, on="level_0")
-    traj_long = traj_long.drop(columns=["level_0"])
-
-    # une ligne par tentative
-    traj_long = traj_long.explode("tentatives", ignore_index=True)
-
-    # normalise les tentatives
-    tentatives = pd.json_normalize(traj_long["tentatives"].apply(lambda x: x if isinstance(x, dict) else {}))
-
-    # joint les infos des tentatives au contexte
-    df_final = traj_long.drop(columns=["tentatives"]).join(tentatives)
-
-    # enlève les lignes sans code
+    # 7) Garder uniquement les lignes où un code existe.
     df_final = df_final[df_final["code"].notna()]
 
-    # remet un index propre
-    df_final = df_final.reset_index(drop=True)
+    # 8) Retirer les statuts non exploitables.
+    # "err" : erreur système ou tentative inexploitable.
+    # "ask" : demande d'aide, pas une vraie soumission de code.
+    df_final = df_final[~df_final["statut"].isin(["err", "ask"])]
 
-    # enlève les statuts "err" et "ask"
-    df_final = df_final[(df_final["statut"] != "err") & (df_final["statut"] != "ask")]
-
-    # transforme ok en 1 et le reste en 0
+    # 9) Transformer le statut en binaire.
+    # ok      -> 1
+    # autre   -> 0
     df_final["statut"] = np.where(df_final["statut"] == "ok", 1, 0)
+
+    # 10) Nettoyer l'index.
+    df_final = df_final.reset_index(drop=True)
 
     return df_final
 
