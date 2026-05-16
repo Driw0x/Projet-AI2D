@@ -4,7 +4,6 @@ local_test.py
 *.csv
 *.json
 *.ipynb
-data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

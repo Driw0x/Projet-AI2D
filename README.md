@@ -23,8 +23,8 @@ Projet-AI2D/
 ├── .gitignore
 │
 ├── data/
-│   ├── 2025.json              # Données brutes AlgoPython, non fournies dans le dépôt
-│   ├── exercises.json         # Solutions attendues, non fournies dans le dépôt
+│   ├── data.json              # Données brutes AlgoPython, non fournies dans le dépôt
+│   ├── solutions.json         # Solutions attendues, non fournies dans le dépôt
 │   ├── cas1.json              # Généré par le projet
 │   ├── cas2.json              # Généré par le projet
 │   └── pre_calcul.json        # Généré par le projet
@@ -54,8 +54,6 @@ Projet-AI2D/
     ├── test_dataset_builder.py
     └── test_io_tools.py
 ```
-
-> Le dossier `data/` peut être absent du dépôt si les données sont privées. Dans ce cas, il faut le créer localement avant de lancer le pipeline principal.
 
 ---
 
@@ -96,8 +94,6 @@ Chaque fichier de test correspond à un module de `tools/` :
 | `test_comparaison.py` | `tools.comparaison` |
 | `test_dataset_builder.py` | `tools.dataset_builder` |
 | `test_io_tools.py` | `tools.io_tools` |
-
-Le fichier `tests/conftest.py` ajoute un faux module `ast_error_detection` si la vraie librairie n'est pas installée. Cela permet de lancer les tests unitaires même sur une machine où la dépendance externe AED est absente.
 
 ---
 
@@ -164,8 +160,8 @@ pip install -r requirements.txt
 Le pipeline principal attend les fichiers suivants :
 
 ```text
-data/2025.json
-data/exercises.json
+data/data.json
+data/solution.json
 ```
 
 Les fichiers générés par les analyses sont sauvegardés dans `data/` :
@@ -218,15 +214,6 @@ Les tests vérifient notamment :
 - les fonctions de comparaison ;
 - la génération de `cas1` et `cas2` ;
 - la classification des profils.
-
----
-
-## Remarques importantes
-
-- `ast_error_detection` est une dépendance externe centrale pour les comparaisons détaillées.
-- Les tests unitaires peuvent fonctionner sans la vraie librairie grâce au mock présent dans `tests/conftest.py`.
-- Pour obtenir les vrais résultats d'analyse, il faut installer correctement `ast_error_detection` et disposer des données AlgoPython réelles.
-- Les dossiers `__pycache__/` et `.pytest_cache/` ne doivent pas être versionnés.
 
 ---
 
